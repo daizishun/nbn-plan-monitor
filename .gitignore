@@ -1,0 +1,10 @@
+node_modules/
+dist/
+client/dist/
+server/dist/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.tsbuildinfo
+.bun-cache/
