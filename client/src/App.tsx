@@ -438,6 +438,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.data]);
 
+  // 「立即刷新」按钮：调 refreshPrices。独立版没有后台自动核价，
+  // 这里只返回手动更新指引，不会真的去查价；手动核价流程见
+  // README“手动核价流程”，录入走 saveRefreshedPlans。
   const refresh = useMutation({
     mutationFn: async () => await api.refreshPrices({}),
     onSuccess: (r) => {

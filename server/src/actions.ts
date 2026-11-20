@@ -520,6 +520,11 @@ export const Actions = {
     request: z.object({}),
     response: z.object({ started: z.boolean(), message: z.string() }),
     async handler() {
+      // 预留的自动核价触发接口（接口定义、参数和返回结构见上方的
+      // request/response；完整约定见 README“自动核价预留接口”）：
+      // 以后接自动核价后台服务时，在这里启动核价任务——启动成功
+      // 返回 { started: true, ... }，核完的结果调 saveRefreshedPlans
+      // 写入；前端的「立即刷新」按钮和数据结构不用改。
       // The Muse-hosted version spawned a background agent task here
       // (ctx.agent.spawnTask) that re-checked WhistleOut, Finder and
       // provider pages and saved the result via saveRefreshedPlans.
@@ -559,6 +564,10 @@ export const Actions = {
     },
   }),
 
+  // 预留的自动核价结果录入接口：以后接自动核价后台服务时，后台
+  // 服务核完价直接调这里写入结果（字段定义见 request schema 和
+  // README“手动核价流程”第 3 步）；手动核价也走同一个接口，
+  // 所以这个 action 的定义、参数和返回结构必须完整保留。
   saveRefreshedPlans: defineAction({
     description:
       "Saves re-verified NBN plan prices from a refresh task: upserts matching plans (including matches under a variant plan/provider name when brand, tier and all prices are identical, so no duplicate row is created), adds genuinely new plans, appends price-history points, removes any duplicate rows, stamps the check date plus the successful-check timestamp the refresh interval is measured from, and records each plan's refresh outcome (updated when a figure changed, unchanged when it did not or was not re-verified) so every row shows 有更新 / 没有更新 after the run.",
