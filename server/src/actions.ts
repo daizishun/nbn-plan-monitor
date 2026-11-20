@@ -2,7 +2,7 @@ import { defineAction, z, type ActionsModule, type Ctx } from "./sdk";
 import { asc, eq, inArray } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import * as schema from "./schema";
-import { CHECKED, SEED_PLANS, SEED_PROVIDERS } from "./seed";
+import { CHECKED, SEED_HISTORY, SEED_PLANS, SEED_PROVIDERS } from "./seed";
 
 const planOut = z.object({
   id: z.number(),
@@ -225,6 +225,24 @@ async function dedupePlans(ctx: Ctx): Promise<number> {
   return removed;
 }
 
+// saveRefreshedPlans 的录入校验：档位白名单与“真日期”判定（正则只能
+// 校验 YYYY-MM-DD 的形状，2026-02-30 这类不存在的日期要另外拦下）。
+const TIERS = ["25", "50", "100", "250", "500", "750", "1000", "2000"] as const;
+
+function isRealDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
 export const Actions = {
   getState: defineAction({
     description:
@@ -331,7 +349,7 @@ export const Actions = {
 
   seedPlans: defineAction({
     description:
-      "Seeds any missing monitored NBN plans, price-history baselines, and nbnco provider directory rows from the 2026-11-19 research snapshot, and removes duplicate plan rows (same brand, tier and identical prices under slightly different names, left behind by earlier refreshes). Idempotent: existing rows are never overwritten, so refreshed prices and user edits survive. The user's own current plan is not seeded — it starts empty and is entered on the page.",
+      "Seeds any missing monitored NBN plans, price-history points, and nbnco provider directory rows from the 2026-11-21 snapshot of the hosted tool's current data, and removes duplicate plan rows (same brand, tier and identical prices under slightly different names, left behind by earlier refreshes). Idempotent: existing rows are never overwritten, so refreshed prices and user edits survive. The user's own current plan is not seeded — it starts empty and is entered on the page.",
     request: z.object({}),
     response: z.object({ seeded: z.boolean(), planCount: z.number() }),
     async handler(ctx) {
@@ -371,7 +389,7 @@ export const Actions = {
               category: p.category,
               source: p.source,
               sourceUrl: p.sourceUrl ?? null,
-              checkedDate: CHECKED,
+              checkedDate: p.checkedDate ?? CHECKED,
               promoEnd: p.promoEnd ?? null,
               note: p.note ?? null,
               lastRefreshStatus: "unchanged" as const,
@@ -396,22 +414,34 @@ export const Actions = {
         changed = true;
       }
       if (missingPlans.length > 0) {
-        // Baseline price-history point for each newly inserted plan only.
+        // Price-history points for each newly inserted plan only, taken
+        // from SEED_HISTORY (the recorded history: one row per plan per
+        // check date, 2026-11-19 / 2026-11-20 / 2026-11-21), so the
+        // chart starts with real points instead of a single baseline.
+        // Existing plans are never touched: their rows and history stay.
         const nowPlans = await db.select().from(schema.plans);
-        const newRows = nowPlans.filter((p) =>
-          missingPlans.some(
-            (m) => key(m.provider, m.planName, m.tier) === key(p.provider, p.planName, p.tier),
-          ),
+        const idByKey = new Map(
+          nowPlans.map((p) => [key(p.provider, p.planName, p.tier), p.id]),
         );
-        const hist: BatchItem<"sqlite">[] = newRows.map((p) =>
-          db.insert(schema.priceHistory).values({
-            planId: p.id,
-            checkedDate: CHECKED,
-            introPrice: p.introPrice,
-            introMonths: p.introMonths,
-            ongoingPrice: p.ongoingPrice,
-          }),
+        const newKeys = new Set(
+          missingPlans.map((m) => key(m.provider, m.planName, m.tier)),
         );
+        const hist: BatchItem<"sqlite">[] = [];
+        for (const h of SEED_HISTORY) {
+          const hk = key(h.provider, h.planName, h.tier);
+          if (!newKeys.has(hk)) continue;
+          const planId = idByKey.get(hk);
+          if (planId == null) continue;
+          hist.push(
+            db.insert(schema.priceHistory).values({
+              planId,
+              checkedDate: h.checkedDate,
+              introPrice: h.introPrice ?? null,
+              introMonths: h.introMonths ?? null,
+              ongoingPrice: h.ongoingPrice,
+            }),
+          );
+        }
         const [h0, ...hRest] = hist;
         if (h0) await db.batch([h0, ...hRest]);
       }
@@ -534,7 +564,7 @@ export const Actions = {
       return {
         started: false,
         message:
-          "独立运行版没有后台自动核价：价格为 2026-11-19 的研究快照，请以供应商官网/CIS 为准；如需更新，可自行核对 WhistleOut、Finder 或供应商官网后，通过 saveRefreshedPlans 接口录入复核结果。",
+          "独立运行版没有后台自动核价：价格为 2026-11-21 的快照，请以供应商官网/CIS 为准；如需更新，可自行核对 WhistleOut、Finder 或供应商官网后，通过 saveRefreshedPlans 接口录入复核结果。",
       };
     },
   }),
@@ -568,27 +598,115 @@ export const Actions = {
   // 服务核完价直接调这里写入结果（字段定义见 request schema 和
   // README“手动核价流程”第 3 步）；手动核价也走同一个接口，
   // 所以这个 action 的定义、参数和返回结构必须完整保留。
+  //
+  // 录入语义（不是全量覆盖）：按供应商 + 套餐名 + 档位匹配，命中的
+  // 行更新价格；没见过的新套餐新增一行；没放进 plans 数组的行保留
+  // 原价和原核对日期（页面显示「没有更新」）。校验在写入之前一次
+  // 性完成：任何一行不通过都返回 400，整批都不写入。
+
   saveRefreshedPlans: defineAction({
     description:
-      "Saves re-verified NBN plan prices from a refresh task: upserts matching plans (including matches under a variant plan/provider name when brand, tier and all prices are identical, so no duplicate row is created), adds genuinely new plans, appends price-history points, removes any duplicate rows, stamps the check date plus the successful-check timestamp the refresh interval is measured from, and records each plan's refresh outcome (updated when a figure changed, unchanged when it did not or was not re-verified) so every row shows 有更新 / 没有更新 after the run.",
-    request: z.object({
-      checked_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      plans: z
-        .array(
-          z.object({
-            provider: z.string().trim().min(1).max(60),
-            plan_name: z.string().trim().min(1).max(120),
-            tier: z.string().trim().min(1).max(10),
-            intro_price: z.number().positive().max(1000).optional(),
-            intro_months: z.number().int().positive().max(36).optional(),
-            ongoing_price: z.number().positive().max(1000),
-            tes: z.string().trim().max(40).optional(),
-            note: z.string().trim().max(400).optional(),
-          }),
-        )
-        .min(1)
-        .max(120),
-    }),
+      "Saves re-verified NBN plan prices from a refresh task: upserts matching plans (including matches under a variant plan/provider name when brand, tier and all prices are identical, so no duplicate row is created), adds genuinely new plans, appends price-history points, removes any duplicate rows, stamps the check date plus the successful-check timestamp the refresh interval is measured from, and records each plan's refresh outcome (updated when a figure changed, unchanged when it did not or was not re-verified) so every row shows 有更新 / 没有更新 after the run. This is an upsert, not a full overwrite: plans left out of the payload keep their old price and check date. The payload is strictly validated before anything is written — a failed check returns HTTP 400 with per-row, per-field error details and nothing is written.",
+    // 严格校验（全部在写入之前完成，见 index.ts 的 safeParse：任何
+    // 一项不通过都返回 HTTP 400 + 逐行逐字段的错误说明，handler
+    // 不运行，整批都不写入）：
+    //   - 必填字段齐全：provider、plan_name、tier、ongoing_price、
+    //     checked_date 缺一不可；
+    //   - tier 必须是 25/50/100/250/500/750/1000/2000 其中之一；
+    //   - 价格类字段（intro_price、ongoing_price）必须是数字且 >= 0；
+    //   - intro_months 是 >= 0 的整数；大于 0 时 intro_price 必须有值；
+    //   - checked_date 是真实存在的日期（YYYY-MM-DD）；
+    //   - plans 数组非空且不超过 120 个。
+    request: z
+      .object({
+        checked_date: z
+          .string({ error: "checked_date 必填，格式 YYYY-MM-DD" })
+          .regex(/^\d{4}-\d{2}-\d{2}$/, "checked_date 格式必须是 YYYY-MM-DD"),
+        plans: z
+          .array(
+            z.object({
+              provider: z
+                .string({ error: "provider 必填，必须是字符串" })
+                .trim()
+                .min(1, "provider 不能为空")
+                .max(60, "provider 最多 60 个字符"),
+              plan_name: z
+                .string({ error: "plan_name 必填，必须是字符串" })
+                .trim()
+                .min(1, "plan_name 不能为空")
+                .max(120, "plan_name 最多 120 个字符"),
+              tier: z
+                .string({ error: "tier 必填，必须是字符串" })
+                .trim()
+                .min(1, "tier 不能为空")
+                .max(10, "tier 最多 10 个字符"),
+              intro_price: z
+                .number({ error: "intro_price 必须是数字" })
+                .min(0, "intro_price 不能小于 0")
+                .max(1000, "intro_price 不能超过 1000")
+                .optional(),
+              intro_months: z
+                .number({ error: "intro_months 必须是数字" })
+                .int("intro_months 必须是整数")
+                .min(0, "intro_months 不能小于 0")
+                .max(36, "intro_months 不能超过 36")
+                .optional(),
+              ongoing_price: z
+                .number({ error: "ongoing_price 必填，必须是数字" })
+                .min(0, "ongoing_price 不能小于 0")
+                .max(1000, "ongoing_price 不能超过 1000"),
+              tes: z
+                .string({ error: "tes 必须是字符串" })
+                .trim()
+                .max(40, "tes 最多 40 个字符")
+                .optional(),
+              note: z
+                .string({ error: "note 必须是字符串" })
+                .trim()
+                .max(400, "note 最多 400 个字符")
+                .optional(),
+            }),
+          )
+          .min(1, "plans 至少要包含 1 个套餐")
+          .max(120, "plans 一次最多 120 个套餐"),
+      })
+      .superRefine((val, ctx) => {
+        if (
+          typeof val.checked_date === "string" &&
+          !isRealDate(val.checked_date)
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["checked_date"],
+            message: "checked_date 不是合法日期（例如 2026-02-30 不存在）",
+          });
+        }
+        if (!Array.isArray(val.plans)) return;
+        val.plans.forEach((p, i) => {
+          const row = i + 1;
+          if (
+            typeof p.tier === "string" &&
+            !(TIERS as readonly string[]).includes(p.tier)
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["plans", i, "tier"],
+              message: `第 ${row} 行 tier：档位必须是 25/50/100/250/500/750/1000/2000 其中之一`,
+            });
+          }
+          if (
+            p.intro_months != null &&
+            p.intro_months > 0 &&
+            p.intro_price == null
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["plans", i, "intro_price"],
+              message: `第 ${row} 行 intro_price：优惠月数大于 0 时必须填写优惠价`,
+            });
+          }
+        });
+      }),
     response: z.object({
       updated: z.number(),
       unchanged: z.number(),
