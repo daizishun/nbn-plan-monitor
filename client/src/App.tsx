@@ -60,9 +60,14 @@ function money(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
+// 比较基准：页面上所有「长期价」排名（每档最便宜标记、各档排序、
+// 顶部推荐）按哪个平均算。默认 12 个月均价；切到 24 个月均价后
+// 立即生效。每个套餐行上两个平均都显示，不受切换影响。
+export type CompareBasis = "avg12" | "avg24";
+
 // 长期价按 12 个月平均算：第一年总费用 ÷ 12。优惠价占头 n 个月就按
 // n 个月算，剩下的月份按优惠结束后的价格算；没有优惠期的套餐，
-// 12 个月平均就是固定价本身。页面上所有「长期价」排名都用这个数。
+// 12 个月平均就是固定价本身。
 function avg12(p: {
   introPrice: number | null;
   introMonths: number | null;
@@ -71,6 +76,32 @@ function avg12(p: {
   if (p.introPrice == null) return p.ongoingPrice;
   const m = Math.min(Math.max(p.introMonths ?? 0, 0), 12);
   return (p.introPrice * m + p.ongoingPrice * (12 - m)) / 12;
+}
+
+// 24 个月平均：两年总费用 ÷ 24，和 avg12 同一算法，只是窗口从
+// 12 个月拉长到 24 个月。优惠价占头 n 个月就按 n 个月算（n 超过
+// 24 按 24 算），剩下的月份按优惠结束后的价格算；没有优惠期的
+// 套餐，24 个月平均就是固定价本身。
+export function avg24(p: {
+  introPrice: number | null;
+  introMonths: number | null;
+  ongoingPrice: number;
+}): number {
+  if (p.introPrice == null) return p.ongoingPrice;
+  const m = Math.min(Math.max(p.introMonths ?? 0, 0), 24);
+  return (p.introPrice * m + p.ongoingPrice * (24 - m)) / 24;
+}
+
+// 按比较基准取一个套餐的平均月费。
+function avgByBasis(
+  p: {
+    introPrice: number | null;
+    introMonths: number | null;
+    ongoingPrice: number;
+  },
+  basis: CompareBasis,
+): number {
+  return basis === "avg24" ? avg24(p) : avg12(p);
 }
 
 // 今天（悉尼日期），YYYY-MM-DD。
@@ -88,10 +119,38 @@ export function isPromoExpired(
   return plan.promoEnd != null && plan.promoEnd < today;
 }
 
+// 供应商名字归一化（和服务端 actions.ts 的 normProviderKey 同规则）：
+// 小写、压缩空格、去掉末尾的 internet / telecom / mobile / broadband，
+// 这样套餐行的 "SpinTel" 能对上供应商目录里的 "Spintel"，"Kogan Internet"
+// 能对上 "Kogan"。用来把品牌名链到供应商官网。
+function normProviderKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s+(internet|telecom|mobile|broadband)$/, "");
+}
+
+// 按归一化后的供应商名建的官网地址表（来自 getState 的 providers）。
+// 品牌名有对应网址时渲染成链接，没有时显示纯文字。
+function buildProviderUrlMap(
+  providers: { name: string; websiteUrl: string | null }[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const p of providers) {
+    if (p.websiteUrl) map.set(normProviderKey(p.name), p.websiteUrl);
+  }
+  return map;
+}
+
 // 同品牌同档位合并：一组 = 同一个品牌在同一档位的所有套餐，
-// 主行是该组 12 个月均价最低的那一个，其余按均价排在展开列表里。
+// 只显示按当前比较基准（12 或 24 个月均价）最便宜的主行；其余
+// 变体不显示，数据保留在库里。切比较基准后主行会跟着换。
 export type BrandGroup = { provider: string; main: Plan; rest: Plan[] };
-export function groupPlansByBrand(plans: Plan[]): BrandGroup[] {
+export function groupPlansByBrand(
+  plans: Plan[],
+  basis: CompareBasis = "avg12",
+): BrandGroup[] {
   const by = new Map<string, Plan[]>();
   for (const p of plans) {
     const key = p.provider.toLowerCase();
@@ -102,7 +161,9 @@ export function groupPlansByBrand(plans: Plan[]): BrandGroup[] {
   const out: BrandGroup[] = [];
   for (const ps of by.values()) {
     const sorted = [...ps].sort(
-      (a, b) => avg12(a) - avg12(b) || a.ongoingPrice - b.ongoingPrice,
+      (a, b) =>
+        avgByBasis(a, basis) - avgByBasis(b, basis) ||
+        a.ongoingPrice - b.ongoingPrice,
     );
     const main = sorted.shift();
     if (!main) continue;
@@ -184,6 +245,14 @@ function firstYearTotal(p: {
   return avg12(p) * 12;
 }
 
+function total24(p: {
+  introPrice: number | null;
+  introMonths: number | null;
+  ongoingPrice: number;
+}): number {
+  return avg24(p) * 24;
+}
+
 function introMonthsClamped(p: {
   introPrice: number | null;
   introMonths: number | null;
@@ -191,6 +260,15 @@ function introMonthsClamped(p: {
 }): number {
   if (p.introPrice == null) return 0;
   return Math.min(Math.max(p.introMonths ?? 0, 0), 12);
+}
+
+function introMonthsClamped24(p: {
+  introPrice: number | null;
+  introMonths: number | null;
+  ongoingPrice: number;
+}): number {
+  if (p.introPrice == null) return 0;
+  return Math.min(Math.max(p.introMonths ?? 0, 0), 24);
 }
 
 /** Full equation for a plan's first-year total, e.g.
@@ -207,6 +285,22 @@ function calcEquation(p: {
   }
   const m = introMonthsClamped(p);
   return `${money(p.introPrice)} × ${m} 个月 + ${money(p.ongoingPrice)} × ${12 - m} 个月 = ${money(total)}`;
+}
+
+/** Full equation for a plan's two-year total, e.g.
+ * "$47.90 × 12 个月 + $70.90 × 12 个月 = $1425.60" or, for a flat plan,
+ * "$80.00 × 24 个月 = $1920.00". */
+function calcEquation24(p: {
+  introPrice: number | null;
+  introMonths: number | null;
+  ongoingPrice: number;
+}): string {
+  const total = total24(p);
+  if (p.introPrice == null) {
+    return `${money(p.ongoingPrice)} × 24 个月 = ${money(total)}`;
+  }
+  const m = introMonthsClamped24(p);
+  return `${money(p.introPrice)} × ${m} 个月 + ${money(p.ongoingPrice)} × ${24 - m} 个月 = ${money(total)}`;
 }
 
 /**
@@ -226,7 +320,7 @@ function CalcToggle({
     <button
       type="button"
       aria-expanded={open}
-      aria-label={`${planName} 第一年费用计算过程`}
+      aria-label={`${planName} 费用计算过程`}
       onClick={onToggle}
       className="ml-2 inline-flex min-h-8 shrink-0 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 align-middle text-xs font-medium whitespace-nowrap text-[var(--accent)]"
     >
@@ -236,9 +330,10 @@ function CalcToggle({
 }
 
 /**
- * Expanded calculation for one plan's first-year total: the intro
- * months at the intro price plus the remaining months at the ongoing
- * price, then the 12-month average derived from that total.
+ * Expanded calculation for one plan's totals: the first-year total
+ * (intro months at the intro price plus the remaining months at the
+ * ongoing price, then the 12-month average) and the two-year total
+ * (same idea over 24 months, then the 24-month average).
  */
 function CalcPanel({
   plan,
@@ -293,6 +388,18 @@ function CalcPanel({
       <p className="price mt-1 text-xs tabular-nums text-[var(--dim)]">
         12 个月平均 = {money(total)} ÷ 12 = {money(avg)}/月
       </p>
+      <p className="mt-3 text-xs font-medium text-[var(--text)]">
+        两年总费用 = 优惠期费用 + 优惠后费用
+        <span className="ml-1 font-normal text-[var(--dim)]">
+          （优惠价占头 {plan.introPrice == null ? 0 : introMonthsClamped24(plan)} 个月，其余月份按优惠结束后的价格算）
+        </span>
+      </p>
+      <p className="price mt-2 border-t border-[var(--border)] pt-2 text-xs font-medium tabular-nums text-[var(--text)]">
+        {calcEquation24(plan)}
+      </p>
+      <p className="price mt-1 text-xs tabular-nums text-[var(--dim)]">
+        24 个月平均 = {money(total24(plan))} ÷ 24 = {money(avg24(plan))}/月
+      </p>
     </div>
   );
 }
@@ -312,7 +419,17 @@ function linkTechTerms(text: string) {
   );
 }
 
-function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
+function PlanRow({
+  plan,
+  rank,
+  providerUrl,
+  basis,
+}: {
+  plan: Plan;
+  rank: number;
+  providerUrl: string | null;
+  basis: CompareBasis;
+}) {
   const [calcOpen, setCalcOpen] = useState(false);
   const promoDays = plan.promoEnd ? daysUntil(plan.promoEnd) : null;
   return (
@@ -322,10 +439,21 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
           <p className="break-words text-base font-semibold text-[var(--text)]">
             {rank === 0 && (
               <span className="mr-2 inline-block bg-[var(--accent)] px-1.5 py-0.5 align-middle text-xs font-semibold text-[var(--accent-ink)]">
-                12 个月平均最低
+                {basis === "avg24" ? "24 个月平均最低" : "12 个月平均最低"}
               </span>
             )}
-            {plan.provider}
+            {providerUrl ? (
+              <a
+                className="underline"
+                href={providerUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {plan.provider}
+              </a>
+            ) : (
+              plan.provider
+            )}
             <span className="ml-2 font-normal text-[var(--dim)]">
               {plan.planName}
             </span>
@@ -361,6 +489,10 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
                   planName={`${plan.provider} ${plan.planName}`}
                 />
               </p>
+              <p className="price text-sm text-[var(--dim)] sm:text-right">
+                24 个月平均 {money(avg24(plan))}/月 · 两年共{" "}
+                {money(total24(plan))}
+              </p>
             </>
           ) : (
             <>
@@ -380,6 +512,10 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
                   planName={`${plan.provider} ${plan.planName}`}
                 />
               </p>
+              <p className="price text-sm text-[var(--dim)] sm:text-right">
+                24 个月平均 {money(avg24(plan))}/月 · 两年共{" "}
+                {money(total24(plan))}
+              </p>
             </>
           )}
         </div>
@@ -394,59 +530,34 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
         <p className="mt-1 text-sm text-[var(--dim)]">{linkTechTerms(plan.note)}</p>
       )}
       <p className="mt-1 text-xs text-[var(--dim)]">
-        来源：
-        {plan.sourceUrl ? (
-          <a
-            className="underline"
-            href={plan.sourceUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {plan.source}
-          </a>
-        ) : (
-          plan.source
-        )}
-        {" · "}核对日期 {plan.checkedDate}
+        来源：{plan.source} · 核对日期 {plan.checkedDate}
       </p>
     </li>
   );
 }
 
-// 同品牌同档位的一组：只显示 12 个月均价最低的主行，其余套餐收在
-// 可展开的列表里（参考电费气费工具按供应商分组的做法）。
+// 一个品牌在一档里的整组只显示一行：按当前比较基准最便宜的主行。
+// 其余变体不显示，数据保留在库里；主行备注里如果有重要变体价格信息
+// （比如 Optus 标准价 $89 的说明）会保留在备注文字里。
 function BrandGroupRow({
   group,
   bestAvg,
+  providerUrl,
+  basis,
 }: {
   group: BrandGroup;
   bestAvg: number;
+  providerUrl: string | null;
+  basis: CompareBasis;
 }) {
-  const [open, setOpen] = useState(false);
-  const { main, rest } = group;
+  const { main } = group;
   return (
-    <>
-      <PlanRow plan={main} rank={avg12(main) === bestAvg ? 0 : -1} />
-      {rest.length > 0 && (
-        <li className="border-b border-[var(--border)] py-2 last:border-b-0">
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            className="text-sm font-medium text-[var(--teal)] underline"
-          >
-            同品牌还有 {rest.length} 个套餐 {open ? "▴" : "▾"}
-          </button>
-          {open && (
-            <ul className="mt-1">
-              {rest.map((p) => (
-                <PlanRow key={p.id} plan={p} rank={-1} />
-              ))}
-            </ul>
-          )}
-        </li>
-      )}
-    </>
+    <PlanRow
+      plan={main}
+      rank={avgByBasis(main, basis) === bestAvg ? 0 : -1}
+      providerUrl={providerUrl}
+      basis={basis}
+    />
   );
 }
 
@@ -454,10 +565,14 @@ function CheapestTierRow({
   tier,
   plan,
   isFirst,
+  providerUrl,
+  basis,
 }: {
   tier: string;
   plan: Plan;
   isFirst: boolean;
+  providerUrl: string | null;
+  basis: CompareBasis;
 }) {
   const [calcOpen, setCalcOpen] = useState(false);
   return (
@@ -465,21 +580,34 @@ function CheapestTierRow({
       <div className="flex flex-col gap-1 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
         <div className="min-w-0">
           <span className="price font-semibold text-[var(--teal)]">{tier}M</span>
-          <span className="ml-2 font-medium text-[var(--text)]">{plan.provider}</span>
+          <span className="ml-2 font-medium text-[var(--text)]">
+            {providerUrl ? (
+              <a
+                className="underline"
+                href={providerUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {plan.provider}
+              </a>
+            ) : (
+              plan.provider
+            )}
+          </span>
           <span className="ml-1 hidden text-sm text-[var(--dim)] sm:inline">{plan.planName}</span>
           <UpdateBadge status={plan.lastRefreshStatus} />
         </div>
         <div className="price text-left text-[var(--text)] sm:shrink-0 sm:text-right">
-          <span className="text-lg font-semibold">{money(avg12(plan))}</span>
-          <span className="text-sm text-[var(--dim)]">/月 · 12 个月平均</span>
+          <span className="text-lg font-semibold">{money(avgByBasis(plan, basis))}</span>
+          <span className="text-sm text-[var(--dim)]">/月 · {basis === "avg24" ? "24 个月平均" : "12 个月平均"}</span>
           <div className="flex flex-wrap items-center text-sm font-normal text-[var(--dim)] sm:justify-end">
             <span>
               {plan.introPrice != null ? (
                 <>
-                  优惠 {money(plan.introPrice)}×{plan.introMonths ?? "—"} 个月 · 之后 {money(plan.ongoingPrice)} · 第一年共 {money(firstYearTotal(plan))}
+                  优惠 {money(plan.introPrice)}×{plan.introMonths ?? "—"} 个月 · 之后 {money(plan.ongoingPrice)} · {basis === "avg24" ? <>两年共 {money(total24(plan))}</> : <>第一年共 {money(firstYearTotal(plan))}</>}
                 </>
               ) : (
-                <>固定价 · 第一年共 {money(firstYearTotal(plan))}</>
+                <>固定价 · {basis === "avg24" ? <>两年共 {money(total24(plan))}</> : <>第一年共 {money(firstYearTotal(plan))}</>}</>
               )}
             </span>
             <CalcToggle
@@ -499,11 +627,53 @@ function CheapestTierRow({
   );
 }
 
+/**
+ * 比较基准切换（12 个月均价 / 24 个月均价）：「每档长期价最低」和
+ * 「套餐明细」顶部各放一个，共用同一个 compareBasis 状态，两边同步。
+ */
+function BasisToggle({
+  basis,
+  onChange,
+  label,
+}: {
+  basis: CompareBasis;
+  onChange: (b: CompareBasis) => void;
+  label: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label={label}>
+      <span className="text-sm text-[var(--dim)]">比较基准：</span>
+      <button
+        type="button"
+        aria-label="按12个月平均价比较"
+        aria-pressed={basis === "avg12"}
+        onClick={() => onChange("avg12")}
+        className={`px-3 py-1.5 text-sm font-medium ${basis === "avg12" ? "bg-[var(--teal)] text-white" : "bg-[var(--surface-alt)] text-[var(--text)]"}`}
+        style={{ borderRadius: "var(--radius)" }}
+      >
+        12 个月均价
+      </button>
+      <button
+        type="button"
+        aria-label="按24个月平均价比较"
+        aria-pressed={basis === "avg24"}
+        onClick={() => onChange("avg24")}
+        className={`px-3 py-1.5 text-sm font-medium ${basis === "avg24" ? "bg-[var(--teal)] text-white" : "bg-[var(--surface-alt)] text-[var(--text)]"}`}
+        style={{ borderRadius: "var(--radius)" }}
+      >
+        24 个月均价
+      </button>
+    </div>
+  );
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const [tierFilter, setTierFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"ongoing" | "intro">("ongoing");
-  const [providerQuery, setProviderQuery] = useState("");
+  // 比较基准：默认 12 个月均价；切到 24 个月均价后，每档最便宜
+  // 标记、各档排序和顶部推荐都按 24 个月均价算，立即生效。
+  const [compareBasis, setCompareBasis] = useState<CompareBasis>("avg12");
   const [recCalcOpen, setRecCalcOpen] = useState(false);
   const seedTried = useRef(false);
 
@@ -518,8 +688,9 @@ export function App() {
   });
 
   useEffect(() => {
-    // Runs once per page load: fills an empty database and backfills any
-    // seed plans added since (existing rows are never overwritten).
+    // Runs once per page load: syncs the seed file into the database —
+    // inserts missing plans/providers and updates stored rows whose seed
+    // values changed (the seed is the only data source).
     if (state.data && !seedTried.current) {
       seedTried.current = true;
       seed.mutate();
@@ -527,12 +698,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.data]);
 
-  // 独立版页面上没有「立即刷新」按钮：没有后台自动核价可触发，
-  // 数据靠手动核价录入（saveRefreshedPlans），刷新页面即可看到
-  // 更新后的数据。后端 refreshPrices 接口保留，见 README
-  // “自动核价预留接口”，以后接自动核价后台服务时再恢复调用。
+  // 独立版页面上没有「立即刷新」按钮：独立版不提供更新数据的接口，
+  // 数据由维护者每周用脚本更新 server/src/seed.ts 后推送到 GitHub，
+  // 重新部署后种子数据进库，刷新页面即可看到更新后的数据。
+  // 品牌名上的链接指向供应商官网，可自行核对最新价格。
 
   const data = state.data;
+
+  const providerUrlMap = useMemo(
+    () => (data ? buildProviderUrlMap(data.providers) : new Map<string, string>()),
+    [data],
+  );
+  const providerUrl = useCallback(
+    (provider: string) => providerUrlMap.get(normProviderKey(provider)) ?? null,
+    [providerUrlMap],
+  );
 
   // 今天（悉尼日期）：优惠过期的套餐不显示（数据保留在库里），
   // 每档最便宜、套餐列表和推荐都只按显示出来的行算。
@@ -542,27 +722,38 @@ export function App() {
     return data.plans.filter((p) => !isPromoExpired(p, todayStr));
   }, [data, todayStr]);
 
-  // 列表排序价：跟原来一致，intro 档按优惠价排，其余按 12 个月平均排。
+  // 当前比较基准下的平均月费：排名（每档最便宜、各档排序、推荐）
+  // 都按这个数算；切到 24 个月均价后立即生效。
+  const avgBasis = useCallback(
+    (p: Plan) => avgByBasis(p, compareBasis),
+    [compareBasis],
+  );
+  // 比较基准的窗口月数和中文名，推荐语和总费用显示共用。
+  const basisMonths = compareBasis === "avg24" ? 24 : 12;
+  const basisLabel = compareBasis === "avg24" ? "24 个月" : "12 个月";
+  const basisYearsLabel = compareBasis === "avg24" ? "两年" : "第一年";
+
+  // 列表排序价：intro 档按优惠价排，其余按当前比较基准的平均排。
   const sortPrice = useCallback(
     (p: Plan) =>
-      sortBy === "intro" ? (p.introPrice ?? p.ongoingPrice) : avg12(p),
-    [sortBy],
+      sortBy === "intro" ? (p.introPrice ?? p.ongoingPrice) : avgBasis(p),
+    [sortBy, avgBasis],
   );
 
-  // 每档长期价最低：长期价 = 12 个月平均月费（见 avg12），同价时
-  // 优惠结束后的月费更低的排前面。
+  // 每档长期价最低：长期价 = 当前比较基准的平均月费（见 avg12 /
+  // avg24），同价时优惠结束后的月费更低的排前面。
   const cheapestByTier = useMemo(() => {
     const out: { tier: string; plan: Plan }[] = [];
     for (const tier of TIERS) {
       const inTier = displayPlans.filter((p) => p.tier === tier);
       if (inTier.length === 0) continue;
       const best = [...inTier].sort(
-        (a, b) => avg12(a) - avg12(b) || a.ongoingPrice - b.ongoingPrice,
+        (a, b) => avgBasis(a) - avgBasis(b) || a.ongoingPrice - b.ongoingPrice,
       )[0];
       if (best) out.push({ tier, plan: best });
     }
     return out;
-  }, [displayPlans]);
+  }, [displayPlans, avgBasis]);
 
   const visiblePlans = useMemo(() => {
     const list = displayPlans.filter(
@@ -598,13 +789,6 @@ export function App() {
         return out;
       });
   }, [data]);
-
-  const filteredProviders = useMemo(() => {
-    if (!data) return [];
-    const q = providerQuery.trim().toLowerCase();
-    if (!q) return data.providers;
-    return data.providers.filter((p) => p.name.toLowerCase().includes(q));
-  }, [data, providerQuery]);
 
   // Current-plan form (local in-flight state only; saved values come from the query).
   const [cpProvider, setCpProvider] = useState("");
@@ -644,12 +828,14 @@ export function App() {
     onError: (e) => setCpError(`清除没成功：${e.message}`),
   });
 
-  // Top recommendation, judged on the same 12-month basis as the rest of
-  // the page: every plan's long-term price is its first-year average
-  // monthly cost (avg12). The user's own basis is their plan's 12-month
-  // average when they're on a tracked intro price (the step-up months are
-  // part of the year), otherwise the monthly fee they entered. best is the
-  // lowest-average plan in their tier or faster that beats that basis.
+  // Top recommendation, judged on the same basis as the rest of the
+  // page (the active comparison basis: 12- or 24-month average):
+  // every plan's long-term price is its average monthly cost on that
+  // basis (avg12 / avg24). The user's own basis is their plan's
+  // average on that basis when they're on a tracked intro price (the
+  // step-up months are part of the window), otherwise the monthly fee
+  // they entered. best is the lowest-average plan in their tier or
+  // faster that beats that basis.
   // Separately, when their intro steps up past the basis, futureBest is
   // the cheapest first-year average against the stepped-up price — shown
   // only as a clearly-labelled after-the-promo note, never as a current
@@ -669,40 +855,49 @@ export function App() {
     const onIntro =
       own?.introPrice != null &&
       Math.abs(cp.monthlyPrice - own.introPrice) < 0.01;
-    const basis = own && onIntro ? avg12(own) : cp.monthlyPrice;
+    const basis = own && onIntro ? avgBasis(own) : cp.monthlyPrice;
     const byValue = (a: Plan, b: Plan) =>
-      avg12(a) - avg12(b) || Number(b.tier) - Number(a.tier);
+      avgBasis(a) - avgBasis(b) || Number(b.tier) - Number(a.tier);
     const best =
       [...displayPlans]
         .filter(
           (p) =>
             Number(p.tier) >= Number(cp.tier) &&
-            avg12(p) < basis - 0.001 &&
+            avgBasis(p) < basis - 0.001 &&
             p.id !== own?.id,
         )
         .sort(byValue)[0] ?? null;
+    // “以后换”只按优惠结束后的价格比：到那时再换，办到的多半已不是
+    // 现在的优惠价（比如 Belong Fast 500 的 $70 只到 2026-11-30，
+    // 而 Kogan 的优惠到 2027-07-01 才结束，到期后 Belong 是 $95，
+    // 比 Kogan 涨价后的 $85.90 还贵）。用 ongoingPrice 比，才不会
+    // 把一个到时办不到的优惠价算成“能省”。
     const futureBest =
       !best && own && own.ongoingPrice > basis + 0.001
         ? ([...displayPlans]
             .filter(
               (p) =>
                 Number(p.tier) >= Number(cp.tier) &&
-                avg12(p) < own.ongoingPrice - 0.001 &&
+                p.ongoingPrice < own.ongoingPrice - 0.001 &&
                 p.id !== own.id,
             )
-            .sort(byValue)[0] ?? null)
+            .sort(
+              (a, b) =>
+                a.ongoingPrice - b.ongoingPrice ||
+                Number(b.tier) - Number(a.tier),
+            )[0] ?? null)
         : null;
     return {
       own,
       onIntro,
       basis,
       best,
-      saving: best ? basis - avg12(best) : 0,
+      saving: best ? basis - avgBasis(best) : 0,
       futureBest,
       futureSaving:
-        futureBest && own ? own.ongoingPrice - avg12(futureBest) : 0,
+        futureBest && own ? own.ongoingPrice - futureBest.ongoingPrice : 0,
     };
-  }, [data, displayPlans]);
+  }, [data, displayPlans, avgBasis]);
 
   return (
     <div className="min-h-screen bg-[var(--bg)] font-sans">
@@ -806,7 +1001,20 @@ export function App() {
                     </h2>
                     <p className="mt-1 text-[var(--text)]">
                       <strong>
-                        {recommendation.best.provider}{" "}
+                        {providerUrl(recommendation.best.provider) ? (
+                          <a
+                            className="underline"
+                            href={
+                              providerUrl(recommendation.best.provider) as string
+                            }
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {recommendation.best.provider}
+                          </a>
+                        ) : (
+                          recommendation.best.provider
+                        )}{" "}
                         {recommendation.best.planName}
                       </strong>
                       <UpdateBadge
@@ -835,23 +1043,23 @@ export function App() {
                       )}
                     </p>
                     <p className="mt-1 text-[var(--text)]">
-                      按 12 个月平均算：你现在这个套餐平均{" "}
+                      按 {basisLabel}平均算：你现在这个套餐平均{" "}
                       <span className="price">
                         {money(recommendation.basis)}/月
                       </span>
                       ，换过去平均{" "}
                       <span className="price">
-                        {money(avg12(recommendation.best))}/月
+                        {money(avgBasis(recommendation.best))}/月
                       </span>
                       ，每月平均省{" "}
                       <strong className="price text-[var(--accent)]">
                         {money(recommendation.saving)}
                       </strong>
-                      ，第一年共{" "}
-                      <span className="price">{money(firstYearTotal(recommendation.best))}</span>
-                      ，第一年共省{" "}
+                      ，{basisYearsLabel}共{" "}
+                      <span className="price">{money(basisMonths === 24 ? total24(recommendation.best) : firstYearTotal(recommendation.best))}</span>
+                      ，{basisYearsLabel}共省{" "}
                       <strong className="price text-[var(--accent)]">
-                        {money(recommendation.saving * 12)}
+                        {money(recommendation.saving * basisMonths)}
                       </strong>
                       。
                       <CalcToggle
@@ -864,7 +1072,7 @@ export function App() {
                       <div>
                         <CalcPanel plan={recommendation.best} />
                         <p className="price mt-1 text-xs text-[var(--dim)]">
-                          省钱计算：你现在第一年 {money(recommendation.basis * 12)} − 推荐套餐第一年 {money(firstYearTotal(recommendation.best))} = {money(recommendation.saving * 12)}
+                          省钱计算：你现在{basisYearsLabel} {money(recommendation.basis * basisMonths)} − 推荐套餐{basisYearsLabel} {money(basisMonths === 24 ? total24(recommendation.best) : firstYearTotal(recommendation.best))} = {money(recommendation.saving * basisMonths)}
                         </p>
                       </div>
                     )}
@@ -875,7 +1083,7 @@ export function App() {
                         {recommendation.own.introMonths ?? "—"}{" "}
                         个月），之后涨到{" "}
                         {money(recommendation.own.ongoingPrice)}
-                        /月——12 个月平均下来是{" "}
+                        /月——{basisLabel}平均下来是{" "}
                         {money(recommendation.basis)}
                         /月，上面的比较用的就是这个平均数。
                       </p>
@@ -919,19 +1127,19 @@ export function App() {
                       你已经用的是最便宜的
                     </h2>
                     <p className="mt-1 text-[var(--text)]">
-                      把优惠期和涨价后的月份都算进去，你现在这个套餐 12
-                      个月平均{" "}
+                      把优惠期和涨价后的月份都算进去，你现在这个套餐{" "}
+                      {basisLabel}平均{" "}
                       <span className="price">
                         {money(recommendation.basis)}/月
                       </span>
                       {recommendation.own && (
                         <>
-                          ，第一年共{" "}
-                          <span className="price">{money(firstYearTotal(recommendation.own))}</span>
+                          ，{basisYearsLabel}共{" "}
+                          <span className="price">{money(basisMonths === 24 ? total24(recommendation.own) : firstYearTotal(recommendation.own))}</span>
                         </>
                       )}
                       ；同档（{data.currentPlan.tier}M）或更快的套餐里，没有
-                      12 个月平均比这更低的了，不用换。
+                      {basisLabel}平均比这更低的了，不用换。
                     </p>
                     {recommendation.futureBest && recommendation.own && (
                       <>
@@ -942,18 +1150,13 @@ export function App() {
                           {recommendation.own.introMonths ?? "—"}{" "}
                           个月），结束后涨到{" "}
                           {money(recommendation.own.ongoingPrice)}
-                          /月。按现在的价格，到那时换{" "}
+                          /月。按优惠结束后的价格算，到那时换{" "}
                           {recommendation.futureBest.provider}{" "}
-                          {recommendation.futureBest.planName}
-                          ，第一年共{" "}
-                          <span className="price">{money(firstYearTotal(recommendation.futureBest))}</span>
-                          ，第一年平均{" "}
-                          {money(avg12(recommendation.futureBest))}
-                          /月，每月平均能省 {money(recommendation.futureSaving)}
+                          {recommendation.futureBest.planName}（
+                          {money(recommendation.futureBest.ongoingPrice)}
+                          /月），每月能省 {money(recommendation.futureSaving)}
                           、第一年 {money(recommendation.futureSaving * 12)}
-                          ——等优惠快到期时再换就行，现在换反而更贵。
-                          {recommendation.futureBest.promoEnd &&
-                            `注意：它的优惠活动 ${recommendation.futureBest.promoEnd} 就结束，到时多半办不到了，届时以本页刷新后的价格为准。`}
+                          ——等优惠快到期时再换就行，现在换反而更贵。到时请以当时的价格为准再比一次。
                         </p>
                       </>
                     )}
@@ -962,19 +1165,33 @@ export function App() {
               </section>
             )}
 
-            {/* Hero: cheapest per tier on a 12-month average basis */}
+            {/* Hero: cheapest per tier on the active comparison basis */}
             <section className="mt-6">
               <h2 className="text-lg font-bold text-[var(--text)]">
                 每档长期价最低
               </h2>
-              <p className="mt-0.5 text-sm text-[var(--dim)]">
-                长期价按 12 个月平均算：第一年总费用 ÷
-                12。优惠价占头几个月就按几个月算，剩下的月份按优惠结束后的价格算——只便宜
-                6 个月的套餐，长期价会落在优惠价和优惠后价格之间。
+              <div className="mt-2">
+                <BasisToggle basis={compareBasis} onChange={setCompareBasis} label="比较基准" />
+              </div>
+              <p className="mt-2 text-sm text-[var(--dim)]">
+                {compareBasis === "avg24" ? (
+                  <>
+                    长期价按 24 个月平均算：两年总费用 ÷
+                    24。优惠价占头几个月就按几个月算（最多 24
+                    个月），剩下的月份按优惠结束后的价格算——只便宜
+                    6 个月的套餐，长期价会落在优惠价和优惠后价格之间。
+                  </>
+                ) : (
+                  <>
+                    长期价按 12 个月平均算：第一年总费用 ÷
+                    12。优惠价占头几个月就按几个月算，剩下的月份按优惠结束后的价格算——只便宜
+                    6 个月的套餐，长期价会落在优惠价和优惠后价格之间。
+                  </>
+                )}
               </p>
               <div className="mt-3 overflow-hidden border border-[var(--border)] bg-[var(--surface)]" style={{ borderRadius: "var(--radius)" }}>
                 {cheapestByTier.map(({ tier, plan }, i) => (
-                  <CheapestTierRow key={tier} tier={tier} plan={plan} isFirst={i === 0} />
+                  <CheapestTierRow key={tier} tier={tier} plan={plan} isFirst={i === 0} providerUrl={providerUrl(plan.provider)} basis={compareBasis} />
                 ))}
               </div>
             </section>
@@ -1111,13 +1328,13 @@ export function App() {
                 <span className="mx-1 hidden h-5 w-px bg-[var(--border)] sm:inline-block" />
                 <button
                   type="button"
-                  aria-label="按12个月平均价排序"
+                  aria-label={`按${basisLabel}平均价排序`}
                   aria-pressed={sortBy === "ongoing"}
                   onClick={() => setSortBy("ongoing")}
                   className={`px-3 py-1.5 text-sm font-medium ${sortBy === "ongoing" ? "bg-[var(--accent)] text-[var(--accent-ink)]" : "bg-[var(--surface-alt)] text-[var(--text)]"}`}
                   style={{ borderRadius: "var(--radius)" }}
                 >
-                  按 12 个月均价
+                  按 {basisLabel}均价
                 </button>
                 <button
                   type="button"
@@ -1129,6 +1346,8 @@ export function App() {
                 >
                   按优惠价
                 </button>
+                <span className="mx-1 hidden h-5 w-px bg-[var(--border)] sm:inline-block" />
+                <BasisToggle basis={compareBasis} onChange={setCompareBasis} label="比较基准" />
               </div>
               {tierFilter === "100" && (
                 <p className="mt-2 text-sm text-[var(--dim)]">
@@ -1162,11 +1381,12 @@ export function App() {
               ).map((tier) => {
                 const inTier = visiblePlans.filter((p) => p.tier === tier);
                 if (inTier.length === 0) return null;
-                // 同品牌同档位合并：每组只显示 12 个月均价最低的主行，
-                // 其余套餐收在组内的展开列表里；组按主行的排序价排。
-                const groups = groupPlansByBrand(inTier);
+                // 同品牌同档位合并：每组只显示按当前比较基准最便宜
+                // 的主行，其余变体不显示（数据保留在库里）；组按主行
+                // 的排序价排；最便宜标记按显示的行、当前基准算。
+                const groups = groupPlansByBrand(inTier, compareBasis);
                 groups.sort((a, b) => sortPrice(a.main) - sortPrice(b.main));
-                const bestAvg = Math.min(...inTier.map((p) => avg12(p)));
+                const bestAvg = Math.min(...inTier.map((p) => avgBasis(p)));
                 return (
                   <div key={tier} className="mt-4">
                     <h3 className="price text-base font-bold text-[var(--teal)]">
@@ -1178,6 +1398,8 @@ export function App() {
                           key={g.provider}
                           group={g}
                           bestAvg={bestAvg}
+                          providerUrl={providerUrl(g.provider)}
+                          basis={compareBasis}
                         />
                       ))}
                     </ul>
@@ -1192,7 +1414,7 @@ export function App() {
                 各档最低价走势（12 个月平均）
               </h2>
               <p className="mt-0.5 text-sm text-[var(--dim)]">
-                每次刷新都会留一个点：按当次的优惠价、优惠月数和优惠后价格算出的第一年平均月费，取每档最低。攒几次之后涨跌就看得出来了。数据始于{" "}
+                种子数据更新、某档价格有变动时会留一个点：按当次的优惠价、优惠月数和优惠后价格算出的第一年平均月费，取每档最低。攒几次之后涨跌就看得出来了。数据始于{" "}
                 {chartData[0]?.date ?? "—"}。
               </p>
               <div className="mt-3 border border-[var(--border)] bg-[var(--surface)] px-2 py-3" style={{ borderRadius: "var(--radius)" }}>
@@ -1311,68 +1533,9 @@ export function App() {
               </p>
             </section>
 
-            {/* Provider directory */}
-            <section className="mt-8">
-              <h2 className="text-lg font-bold text-[var(--text)]">
-                nbnco 供应商目录
-              </h2>
-              <p className="mt-0.5 text-sm text-[var(--dim)]">
-                名单来自{" "}
-                <a
-                  className="underline"
-                  href="https://www.nbnco.com.au/residential/service-providers"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  nbnco 官网供应商页
-                </a>
-                （2026-11-19 核对，约 140 家）。这是全国名单，上榜不等于能服务你这个地址；带链接的是已逐个核对过官网地址的
-                10 家大供应商，其余请在 nbnco 页面里点各自的「Visit website」。
-              </p>
-              <input
-                aria-label="搜索供应商"
-                value={providerQuery}
-                onChange={(e) => setProviderQuery(e.target.value)}
-                placeholder="搜索供应商名字…"
-                className="mt-3 w-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-[var(--text)]"
-                style={{ borderRadius: "var(--radius)" }}
-              />
-              <p className="mt-2 text-sm text-[var(--dim)]">
-                共 {filteredProviders.length} 家
-              </p>
-              <ul className="mt-1 flex flex-wrap gap-1.5">
-                {filteredProviders.map((p) => (
-                  <li key={p.name}>
-                    {p.websiteUrl ? (
-                      <a
-                        href={p.websiteUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-block bg-[var(--teal-soft)] px-2.5 py-1.5 text-sm font-medium text-[var(--teal)] underline"
-                        style={{ borderRadius: "var(--radius)" }}
-                      >
-                        {p.name}
-                      </a>
-                    ) : (
-                      <span
-                        className="inline-block bg-[var(--surface-alt)] px-2.5 py-1.5 text-sm text-[var(--text)]"
-                        style={{ borderRadius: "var(--radius)" }}
-                      >
-                        {p.name}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-
             <footer className="mt-10 border-t border-[var(--border)] pt-3 text-xs leading-5 text-[var(--dim)]">
-              价格为 2026-11-21 核对的研究快照（来源逐项标注在每个套餐下）。独立运行版没有自动复核：按 README「手动核价流程」自行核对
-              WhistleOut、Finder 或供应商官网后，通过服务端的
-              saveRefreshedPlans 接口录入复核结果，刷新页面即可看到更新后的数据。每次核对录入后，顶部推荐、每档最低表和套餐明细里的套餐旁会有一个小圆图标：绿色 ↑ 表示有更新，灰色 － 表示没有更新，红色 ! 表示更新失败。每个第一年总费用后面都有「计算过程」，点开能看到优惠价 × 月数 + 优惠后价 × 剩余月数 = 第一年总费用的等式。NBN
-              没有公开的价格数据接口，刷新靠重新核对 WhistleOut、Finder
-              和各供应商官网/CIS 文件；核对不到的套餐保留原价和原核对日期，不会用猜测的数字填充。长期价一律按第一年
-              12 个月的平均月费计算，签约前请以供应商 CIS 为准。
+              价格为 2026-11-21 核对的研究快照（来源逐项标注在每个套餐下）。数据来源：Canstar 为主，nbntracker-data 为第二来源/交叉核对，WhistleOut、Finder 和供应商官网/CIS 用于核对。独立运行版不提供更新数据的接口：数据由维护者每周用脚本更新种子文件并推送到 GitHub，重新部署后刷新页面即可看到更新后的数据。顶部推荐、每档最低表和套餐明细里的套餐旁会有一个小圆图标：绿色 ↑ 表示有更新，灰色 － 表示没有更新，红色 ! 表示更新失败。每个套餐费用后面都有「计算过程」，点开能看到第一年和两年总费用的等式（优惠价 × 月数 + 优惠后价 × 剩余月数）。NBN
+              没有公开的价格数据接口；核对不到的套餐保留原价和原核对日期，不会用猜测的数字填充。长期价按 12 个月或 24 个月平均月费计算（「每档长期价最低」处可切换比较基准，默认 12 个月），签约前请以供应商 CIS 为准。
             </footer>
           </>
         )}

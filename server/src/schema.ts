@@ -48,8 +48,9 @@ export const priceHistory = sqliteTable("price_history", {
   ongoingPrice: real("ongoing_price").notNull(),
 });
 
-// nbnco-listed retail providers. Only the major providers have a verified
-// website URL; the rest link out via the nbnco directory page.
+// nbnco-listed retail providers. Every provider with plans in the seed
+// has a verified website URL (brand names on the page link to it); the
+// rest link out via the nbnco directory page.
 export const providers = sqliteTable("providers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),

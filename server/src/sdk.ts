@@ -8,10 +8,10 @@
 //     database, `ctx.invalidateQueries()` asked the Muse host to refetch
 //     client queries (a no-op here — the browser invalidates its own
 //     react-query cache after every mutation).
-//   - `ctx.agent.spawnTask` (used by the old `refreshPrices` action to
-//     run a background price re-check) — there is no agent in the
-//     standalone build, so that action now reports that it cannot run;
-//     see `actions.ts`.
+//   - `ctx.agent.spawnTask` — the Muse-original `refreshPrices` action
+//     used it to run a background price re-check. The standalone build
+//     has no agent and no price-update interfaces at all (data comes only
+//     from the seed file), so `spawnTask` is not used; see `actions.ts`.
 //
 // Only public npm packages are needed here: `zod` and `drizzle-orm`.
 
