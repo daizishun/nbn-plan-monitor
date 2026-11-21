@@ -259,6 +259,21 @@ function CalcPanel({
   );
 }
 
+// 套餐备注里提到 FTTP / FTTC / HFC 时，把这个词链到页面下方
+// 「接入技术说明」一节（#tech-speed），那里写明了每种接入方式
+// 对应的最高速度（FTTP 最高 2000，FTTC 一般最高 100，HFC 最高 2000）。
+function linkTechTerms(text: string) {
+  return text.split(/(FTTP|FTTC|HFC)/g).map((part, i) =>
+    part === "FTTP" || part === "FTTC" || part === "HFC" ? (
+      <a key={i} className="underline" href="#tech-speed">
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  );
+}
+
 function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
   const [calcOpen, setCalcOpen] = useState(false);
   const promoDays = plan.promoEnd ? daysUntil(plan.promoEnd) : null;
@@ -338,7 +353,7 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
         </p>
       )}
       {plan.note && (
-        <p className="mt-1 text-sm text-[var(--dim)]">{plan.note}</p>
+        <p className="mt-1 text-sm text-[var(--dim)]">{linkTechTerms(plan.note)}</p>
       )}
       <p className="mt-1 text-xs text-[var(--dim)]">
         来源：{plan.source} · 核对日期 {plan.checkedDate}
@@ -414,7 +429,6 @@ export function App() {
   const [tierFilter, setTierFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"ongoing" | "intro">("ongoing");
   const [providerQuery, setProviderQuery] = useState("");
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
   const [recCalcOpen, setRecCalcOpen] = useState(false);
   const seedTried = useRef(false);
 
@@ -438,43 +452,12 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.data]);
 
-  // 「立即刷新」按钮：调 refreshPrices。独立版没有后台自动核价，
-  // 这里只返回手动更新指引，不会真的去查价；手动核价流程见
-  // README“手动核价流程”，录入走 saveRefreshedPlans。
-  const refresh = useMutation({
-    mutationFn: async () => await api.refreshPrices({}),
-    onSuccess: (r) => {
-      setRefreshMsg(r.message);
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-    },
-    onError: (e) =>
-      setRefreshMsg(`刷新没能启动：${e.message}。现有数据仍保留。`),
-  });
+  // 独立版页面上没有「立即刷新」按钮：没有后台自动核价可触发，
+  // 数据靠手动核价录入（saveRefreshedPlans），刷新页面即可看到
+  // 更新后的数据。后端 refreshPrices 接口保留，见 README
+  // “自动核价预留接口”，以后接自动核价后台服务时再恢复调用。
 
   const data = state.data;
-
-  // Sync on open: if the last successful check is older than the 24h
-  // refresh interval (measured from that success, not from the last
-  // attempt), start a check — but never more often than once per 30
-  // minutes, so a check that is running or just failed is retried after
-  // 30 minutes instead of immediately or after a whole interval.
-  const autoSyncTried = useRef(false);
-  useEffect(() => {
-    if (!data || autoSyncTried.current) return;
-    autoSyncTried.current = true;
-    const now = Date.now();
-    const successAt = data.lastSuccessAt
-      ? Date.parse(data.lastSuccessAt)
-      : null;
-    const attemptAt = data.lastAttemptAt
-      ? Date.parse(data.lastAttemptAt)
-      : null;
-    const successStale =
-      successAt == null || now - successAt > 24 * 3600 * 1000;
-    const attemptRecent = attemptAt != null && now - attemptAt < 30 * 60 * 1000;
-    if (successStale && !attemptRecent) refresh.mutate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data]);
 
   // 每档长期价最低：长期价 = 12 个月平均月费（见 avg12），同价时
   // 优惠结束后的月费更低的排前面。
@@ -647,7 +630,18 @@ export function App() {
                 NBN 套餐监测
               </h1>
               <p className="mt-1 text-sm text-[var(--dim)]">
-                接入技术按地址而定（FTTP / FTTC / HFC
+                接入技术按地址而定（
+                <a className="underline" href="#tech-speed">
+                  FTTP
+                </a>
+                {" / "}
+                <a className="underline" href="#tech-speed">
+                  FTTC
+                </a>
+                {" / "}
+                <a className="underline" href="#tech-speed">
+                  HFC
+                </a>
                 等），不同地址能办的最高档位不同，实际速度看套餐档位；下单前请让供应商按你的地址确认一次。
               </p>
               <p className="mt-0.5 text-sm text-[var(--dim)]">
@@ -658,32 +652,31 @@ export function App() {
                 {data?.lastAttemptStatus === "success" && "（检查成功）"}
                 {data?.lastAttemptStatus === "started" && "（检查中…）"}
                 {data?.lastAttemptStatus === "failed" &&
-                  "（更新失败，可点「立即刷新」重试）"}
+                  "（更新失败，刷新页面重试）"}
                 {data?.lastSuccessAt &&
                   data.lastAttemptAt !== data.lastSuccessAt &&
                   ` · 上次成功更新：${fmtTime(data.lastSuccessAt)}`}
               </p>
             </div>
-            <button
-              type="button"
-              aria-label="立即刷新价格"
-              disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
-              className="shrink-0 bg-[var(--accent)] px-4 py-2 text-base font-semibold text-[var(--accent-ink)] disabled:opacity-50"
-              style={{ borderRadius: "var(--radius)" }}
-            >
-              {refresh.isPending ? "启动中…" : "立即刷新"}
-            </button>
           </div>
-          {refreshMsg && (
-            <p className="mt-2 bg-[var(--teal-soft)] px-3 py-2 text-sm text-[var(--text)]">
-              {refreshMsg}
-            </p>
-          )}
           <p className="mt-2 text-sm text-[var(--dim)]">
-            同一邮编内不同街道的接入技术可能不同（FTTP 与 FTTC
-            混合很常见），技术按地址定，不能按邮编一概而论；FTTP
-            地址能办 500/750/1000 高速档，FTTC 地址最高一般只能到 100。
+            同一邮编内不同街道的接入技术可能不同（
+            <a className="underline" href="#tech-speed">
+              FTTP
+            </a>
+            {" 与 "}
+            <a className="underline" href="#tech-speed">
+              FTTC
+            </a>
+            混合很常见），技术按地址定，不能按邮编一概而论；
+            <a className="underline" href="#tech-speed">
+              FTTP
+            </a>
+            地址能办 500/750/1000 高速档，
+            <a className="underline" href="#tech-speed">
+              FTTC
+            </a>
+            地址最高一般只能到 100。
           </p>
         </section>
 
@@ -1147,7 +1140,7 @@ export function App() {
             </section>
 
             {/* Technology notes */}
-            <section className="mt-8">
+            <section id="tech-speed" className="mt-8">
               <h2 className="text-lg font-bold text-[var(--text)]">
                 接入技术说明
               </h2>
@@ -1163,6 +1156,10 @@ export function App() {
                     可达 250 Mbps——这一点没有在本地核实，以 100 为准。FTTC
                     地址可申请免费升级 FTTP（Fibre Connect，2026 年 7 月 1
                     日起不再要求先订高速套餐）。
+                  </li>
+                  <li>
+                    HFC：2025 年 9 月 14 日起与 FTTP 同档升级（原 100/20
+                    升为 500/50），最高 2000 档。
                   </li>
                   <li>
                     2025 年 9 月 14 日起（仅 FTTP/HFC）：原 100/20 升为
@@ -1280,9 +1277,9 @@ export function App() {
             </section>
 
             <footer className="mt-10 border-t border-[var(--border)] pt-3 text-xs leading-5 text-[var(--dim)]">
-              价格为 2026-11-19 核对的研究快照（来源逐项标注在每个套餐下）。独立运行版没有自动复核：点「立即刷新」会提示手动更新方式，也可以自行核对
+              价格为 2026-11-21 核对的研究快照（来源逐项标注在每个套餐下）。独立运行版没有自动复核：按 README「手动核价流程」自行核对
               WhistleOut、Finder 或供应商官网后，通过服务端的
-              saveRefreshedPlans 接口录入复核结果。每次刷新后，顶部推荐、每档最低表和套餐明细里的套餐旁会有一个小圆图标：绿色 ↑ 表示有更新，灰色 － 表示没有更新，红色 ! 表示更新失败。每个第一年总费用后面都有「计算过程」，点开能看到优惠价 × 月数 + 优惠后价 × 剩余月数 = 第一年总费用的等式。NBN
+              saveRefreshedPlans 接口录入复核结果，刷新页面即可看到更新后的数据。每次核对录入后，顶部推荐、每档最低表和套餐明细里的套餐旁会有一个小圆图标：绿色 ↑ 表示有更新，灰色 － 表示没有更新，红色 ! 表示更新失败。每个第一年总费用后面都有「计算过程」，点开能看到优惠价 × 月数 + 优惠后价 × 剩余月数 = 第一年总费用的等式。NBN
               没有公开的价格数据接口，刷新靠重新核对 WhistleOut、Finder
               和各供应商官网/CIS 文件；核对不到的套餐保留原价和原核对日期，不会用猜测的数字填充。长期价一律按第一年
               12 个月的平均月费计算，签约前请以供应商 CIS 为准。
