@@ -394,20 +394,20 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
         <p className="mt-1 text-sm text-[var(--dim)]">{linkTechTerms(plan.note)}</p>
       )}
       <p className="mt-1 text-xs text-[var(--dim)]">
-        来源：{plan.source} · 核对日期 {plan.checkedDate}
-        {plan.sourceUrl && (
-          <>
-            {" · "}
-            <a
-              className="underline"
-              href={plan.sourceUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              查看来源页
-            </a>
-          </>
+        来源：
+        {plan.sourceUrl ? (
+          <a
+            className="underline"
+            href={plan.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {plan.source}
+          </a>
+        ) : (
+          plan.source
         )}
+        {" · "}核对日期 {plan.checkedDate}
       </p>
     </li>
   );

@@ -208,6 +208,8 @@ def load_seed(path):
 
 def to_payload_row(r):
     # saveRefreshedPlans expects tier as a STRING ("50"), like the seed.
+    # Every row is stamped with its source so the page can show (and
+    # link to) where each price came from.
     row = {
         "provider": r["provider"],
         "plan_name": r["plan_name"],
@@ -215,6 +217,8 @@ def to_payload_row(r):
         "intro_price": r["intro_price"],
         "intro_months": r["intro_months"],
         "ongoing_price": r["ongoing_price"],
+        "source": "Canstar",
+        "source_url": "https://www.canstar.com.au/internet/nbn-plans/",
     }
     if r["tes_down"] is not None:
         row["tes"] = (f"{r['tes_down']}/{r['tes_up']} Mbps"

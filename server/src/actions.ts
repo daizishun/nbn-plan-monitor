@@ -618,6 +618,9 @@ export const Actions = {
     //   - intro_months 是 >= 0 的整数；大于 0 时 intro_price 必须有值；
     //   - checked_date 是真实存在的日期（YYYY-MM-DD）；
     //   - plans 数组非空且不超过 120 个。
+    //   - 可选的 source（最多 60 字符）和 source_url（最多 300 字符，
+    //     提供时必须以 http:// 或 https:// 开头）：提供就按提供的记，
+    //     没提供则更新时保留原来的、新插入时用通用标签 / null。
     request: z
       .object({
         checked_date: z
@@ -671,6 +674,19 @@ export const Actions = {
                 .trim()
                 .max(10, "promo_end 最多 10 个字符")
                 .optional(),
+              // 每行来源：提供就按提供的记，没提供就保留原来的。
+              // source 例如 "Canstar"、"nbntracker-data"、"WhistleOut"、
+              // "Optus 官网"；source_url 是该价格的来源页链接。
+              source: z
+                .string({ error: "source 必须是字符串" })
+                .trim()
+                .max(60, "source 最多 60 个字符")
+                .optional(),
+              source_url: z
+                .string({ error: "source_url 必须是字符串" })
+                .trim()
+                .max(300, "source_url 最多 300 个字符")
+                .optional(),
             }),
           )
           .min(1, "plans 至少要包含 1 个套餐")
@@ -720,6 +736,17 @@ export const Actions = {
               code: "custom",
               path: ["plans", i, "promo_end"],
               message: `第 ${row} 行 promo_end：不是合法日期（例如 2026-02-30 不存在）`,
+            });
+          }
+          if (
+            typeof p.source_url === "string" &&
+            p.source_url !== "" &&
+            !/^https?:\/\//.test(p.source_url)
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["plans", i, "source_url"],
+              message: `第 ${row} 行 source_url：必须是 http:// 或 https:// 开头的网址`,
             });
           }
         });
@@ -792,7 +819,14 @@ export const Actions = {
                 p.promo_end && p.promo_end.length > 0
                   ? p.promo_end
                   : match.promoEnd,
-              source: "刷新复核（WhistleOut / Finder / 供应商官网）",
+              // 来源也一样：提供了就按提供的记，没提供保留原来的，
+              // 不再每次都覆写成通用标签。
+              source:
+                p.source && p.source.length > 0 ? p.source : match.source,
+              sourceUrl:
+                p.source_url && p.source_url.length > 0
+                  ? p.source_url
+                  : match.sourceUrl,
               lastRefreshStatus: changed ? "updated" : "unchanged",
               lastRefreshAt: nowIso,
             })
@@ -826,7 +860,14 @@ export const Actions = {
               ongoingPrice: p.ongoing_price,
               tes: p.tes ?? null,
               category: "cheapest",
-              source: "刷新复核（WhistleOut / Finder / 供应商官网）",
+              source:
+                p.source && p.source.length > 0
+                  ? p.source
+                  : "刷新复核（WhistleOut / Finder / 供应商官网）",
+              sourceUrl:
+                p.source_url && p.source_url.length > 0
+                  ? p.source_url
+                  : null,
               checkedDate: args.checked_date,
               note: p.note ?? null,
               promoEnd:
