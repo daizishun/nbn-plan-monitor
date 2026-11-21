@@ -748,9 +748,17 @@ export const Actions = {
         if (match) {
           touchedIds.add(match.id);
           const newTes = p.tes ?? match.tes;
+          // Stored NULL intro means "no intro" (flat plan): compare it
+          // as intro == ongoing with 0 months. Otherwise every flat
+          // plan looks "updated" the first time a refresh posts its
+          // flat price explicitly (NULL !== price).
+          const prevIntro = match.introPrice ?? match.ongoingPrice;
+          const prevMonths = match.introMonths ?? 0;
+          const nextIntro = p.intro_price ?? p.ongoing_price;
+          const nextMonths = p.intro_months ?? 0;
           const changed =
-            match.introPrice !== (p.intro_price ?? null) ||
-            match.introMonths !== (p.intro_months ?? null) ||
+            prevIntro !== nextIntro ||
+            prevMonths !== nextMonths ||
             match.ongoingPrice !== p.ongoing_price ||
             match.tes !== newTes;
           await db
@@ -819,8 +827,14 @@ export const Actions = {
       // Plans this refresh did not re-verify keep their old price, so
       // for this run they are 没有更新 — stamp that outcome on them too,
       // so every row on the page carries a status for the latest run.
+      // A full refresh is split into several calls (at most 120 plans
+      // per call) that all share one checked_date: rows already stamped
+      // by an earlier batch of this run carry that same checked_date,
+      // so skip them here — otherwise each later batch would wipe the
+      // "updated" flags the earlier batches just set, and only the last
+      // batch's changes would ever show green.
       for (const e of existing) {
-        if (!touchedIds.has(e.id)) {
+        if (!touchedIds.has(e.id) && e.checkedDate !== args.checked_date) {
           await db
             .update(schema.plans)
             .set({ lastRefreshStatus: "unchanged", lastRefreshAt: nowIso })
