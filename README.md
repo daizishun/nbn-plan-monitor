@@ -41,7 +41,7 @@ bun run start        # 默认 http://localhost:3000
 - **套餐数据来源**：内置快照是 2026-11-21 的当前数据（250 个套餐、151 家供应商、440 条价格历史；其中 105 个来自原版工具当天数据库里已核对过的数据，145 个是同日对照 Canstar 后补入的），价格逐项核对自 WhistleOut 价目表、Finder 最便宜 NBN 套餐表、Superloop 等供应商官网/CIS 文件，以及 nbnco 供应商目录（见页面底部的供应商目录）。每个套餐下方都标注了来源和核对日期；长期价一律按第一年 12 个月的平均月费计算，签约前请以供应商 CIS 为准。
 - **本地数据库**：首次启动自动建空库，打开页面时 `seedPlans` 会把上述快照写入库中（已有的行不会被覆盖）。数据库文件只存在你自己的机器上。
 - **当前套餐**：默认是空的，需要你自己在页面上输入供应商、速度档位和每月月费，推荐和省钱计算才会出现；也可以随时清除。
-- **没有自动刷新**：原版在 Muse 托管环境里靠后台代理每天自动核价；独立运行版没有这个代理，也没有「立即刷新」按钮——按下面「手动核价流程」自行核对后录入，刷新页面即可看到更新后的数据（`markRefreshFailed` 用于记录一次失败的检查）。NBN 没有公开的价格数据接口，核对不到的套餐会保留原价和原核对日期，不会用猜测的数字填充。
+- **没有自动刷新**：原版在 Muse 托管环境里靠后台代理每天自动核价；独立运行版没有这个代理，也没有「立即刷新」按钮——可以用 `scripts/canstar_fetch.py` 一次拉取 Canstar 全部套餐并自动比对（见「数据获取方式」→「自动取数脚本」），再按下面「手动核价流程」录入；刷新页面即可看到更新后的数据（`markRefreshFailed` 用于记录一次失败的检查）。NBN 没有公开的价格数据接口，核对不到的套餐会保留原价和原核对日期，不会用猜测的数字填充。
 
 ## 数据获取方式
 
@@ -63,6 +63,33 @@ bun run start        # 默认 http://localhost:3000
 - 去重后数量（2026-11-21 核对）：25 档 33、50 档 33、100 档 51、250 档 6、500 档 48、750 档 24、1000 档 34、2000 档 14，共 243 个（另有 12M 档 5 个）。
 - 限制：页面一次最多显示 160 行；没有 12 与 25、100 与 250 的精确档位筛选——这两对按行里实际速度拆开再数；条数是列表变体数，不是去重后的套餐数；页面自述不是全市场比价。
 
+### 自动取数脚本（推荐）
+
+Canstar 没有公开的价格数据接口，但套餐表是服务端直接渲染在结果页里的，不用登录、不用 API key，一次请求就能拉全量。脚本 `scripts/canstar_fetch.py`（Python 3 + curl）就是走这条路，2026-11-21 首次验证通过。
+
+**取数方法**：请求结果页 `https://www.canstar.com.au/internet/nbn-plans/results/?tV=<base64>&returned=true`，其中 `tV` 是 base64 编码的筛选条件：`initialPageSize=500&pageSize=500&onlinePartner=false&sortBy=default&sortDir=desc&comparisonId=<任意 uuid>&nbnSpeed=nbnSpeed12PlusFlt&typeInternetPlan=NBN&isModemIncluded=skip&edit=true`。`pageSize=500` 一次拉到全部 458 条（Online Partners 关掉时的全量）；`nbnSpeed` 档位值是 `12PlusFlt` / `50PlusFlt` / `100PlusFlt` / `500PlusFlt` / `750PlusFlt` / `1000PlusFlt` / `2000PlusFlt`（均为“X 及以上”累计档位，精确档位按每条套餐的“Max download speed”划分）。价格以展示字符串形式嵌在卡片里，脚本解析广告价大字 + 小字“for N months, then $Y/mth”（得优惠价/月数/续费价），用 “Equivalent monthly cost” 栏校验 12 个月均价。12M 档不取（本项目不收 12M 套餐）。
+
+**用法**（在项目根目录跑）：
+
+```bash
+python3 scripts/canstar_fetch.py
+# 输出到 canstar-out/：
+#   canstar_plans.json          全部实时套餐行（282 个去重后）
+#   canstar_diff.json           与内置快照的比对结果
+#   canstar_payload_part1.json  可直接录入的 saveRefreshedPlans 数据（≤120 行/份）
+#   canstar_payload_part2.json  同上
+```
+
+**比对结果（`canstar_diff.json`）分这几类**：
+
+- `changed`：价格真的变了的行——先去供应商官网确认，再录入（见下面「待核对的价格变动」）。
+- `known_exceptions`：已知的价格口径差异，不是真的变价——不要覆盖（目前只有 DODO 的 WhistleOut 专享优惠价，见下面）。
+- `variant_mismatch`：同一套餐名有多个价格变体、且没有一个和快照对得上——人工核对后再定。
+- `seed_missing`：快照里有、实时数据里按名字找不到的行——大多是名字对不上，不是套餐下架（见 `rename_candidates`：品牌 + 档位 + 三个价格全一样，只是名字不同，例如工具里的 “Kogan Internet / Gold Plus 500”）。
+- `live_new`：实时数据里有、快照里没有的行——人工确认是新套餐后再新增（不要直接录入，会新增一行）。
+
+**注意**：脚本只生成 `payload` 的是按名字（忽略大小写）能对上快照的行；对不上的行不会进 `payload`，避免重复建行。录入前务必先看一遍 `canstar_diff.json` 的 `changed` 和 `known_exceptions`。2026-11-21 实测：465 个标题 → 282 个去重后套餐行，0 个解析问题，全部 282 行的 12 个月均价与 Canstar 展示值一致；按名字对上快照 149 行，其中 148 行无变化、1 行真变价、1 行已知口径差异。
+
 ### 去重规则
 
 同一商家 + 同一套餐名 + 同一价格组合算一个；同一套餐的 BYO / 带 modem / 合约 / 捆绑变体只算一个。
@@ -79,9 +106,17 @@ bun run start        # 默认 http://localhost:3000
 4. 核不到的套餐不要录入，保留原价和原核对日期，不要猜数字填进去。
 5. 同一套餐在不同来源价格不一致时，先看是不是优惠版本的区别（例如 DODO 的 WhistleOut 专享价比 Canstar 标准价低约 $4，专享价是对的）；分不清的以官网为准，仍分不清的保留原价并在备注里写明。
 
+### 待核对的价格变动（2026-11-21，脚本首次运行发现）
+
+下面这些**没有**写进内置快照，等核对确认后再更新：
+
+- **SpinTel NBN 100（100 档）——真变价，待确认**：快照里 $76 × 6 个月、之后 $89.95；Canstar 实时显示 $69 × 6 个月、之后 $89.95。这也解开了之前未解决的疑问（工具 $76 / Canstar $69）：Canstar 两次都显示 $69。更新前请先去 SpinTel 官网核对 $69 是否仍有效，确认后再把这一行放进录入数据。
+- **DODO NBN 500（500 档）——不是变价，不要改**：快照里 $58.89 × 6 个月、之后 $92.99；Canstar 实时显示 $62.99 × 6 个月、之后 $92.99。$58.89 是 DODO 的 WhistleOut 专享优惠价，工具里的数是对的，Canstar 显示的是标准优惠价。脚本已把这类行单独列为 `known_exceptions`，`payload` 里保留快照的价格，不会覆盖。
+- **Aussie Fast Fibre（500 档）、MyOwn Tel Superfast Pro Plus（500 档）——不是变价，是变体**：早先比对时曾以为这两家降价了（Fast Fibre $69→$67、Superfast Pro Plus $116→$114），仔细核对后发现是同一套餐名下有两个价格变体，快照里两个价都已经有了（Fast Fibre $69 另有 “Fast Fibre (Canstar)” $67；Superfast Pro Plus $116 另有 “Superfast Pro Plus BYO” $114）。不用改。
+
 ## 手动核价流程
 
-独立运行版没有后台自动核价，价格不会自己更新。按下面流程手动核对并录入，价格、推荐和图表才会跟着更新。**建议每月核一次**；打算换套餐、看到促销新闻、或某个套餐的优惠快到期时，再加核一次。
+独立运行版没有后台自动核价，价格不会自己更新。**先跑 `scripts/canstar_fetch.py`（见上面「数据获取方式」→「自动取数脚本」）**：它一次拉取 Canstar 全部套餐、自动比对并生成可直接录入的文件；再按下面流程核对差异、录入。也可以完全手动按下面流程走。**建议每月核一次**；打算换套餐、看到促销新闻、或某个套餐的优惠快到期时，再加核一次。
 
 ### 第 0 步：看上次核对时间
 
@@ -113,7 +148,18 @@ bun run start        # 默认 http://localhost:3000
 
 ### 第 4 步：录入保存
 
-服务先跑起来（默认 <http://localhost:3000>），用 curl 调服务端的 `saveRefreshedPlans` 接口。一次最多录 120 个套餐，库里一共 250 个，要分 3 次录完。`checked_date` 填你核对当天的日期（格式 `YYYY-MM-DD`）：
+服务先跑起来（默认 <http://localhost:3000>），用 curl 调服务端的 `saveRefreshedPlans` 接口。**用脚本跑完的话，直接用它生成的 `canstar-out/canstar_payload_part1.json`、`canstar_payload_part2.json`**（已按 120 个一份分好，`checked_date` 已填当天）：
+
+```bash
+curl -X POST http://localhost:3000/actions \
+  -H 'Content-Type: application/json' \
+  -d "{\"action\": \"saveRefreshedPlans\", \"args\": $(cat canstar-out/canstar_payload_part1.json)}"
+curl -X POST http://localhost:3000/actions \
+  -H 'Content-Type: application/json' \
+  -d "{\"action\": \"saveRefreshedPlans\", \"args\": $(cat canstar-out/canstar_payload_part2.json)}"
+```
+
+手动录入时一次最多录 120 个套餐，库里一共 250 个，要分 3 次录完。`checked_date` 填你核对当天的日期（格式 `YYYY-MM-DD`）：
 
 ```bash
 curl -X POST http://localhost:3000/actions \
@@ -212,6 +258,7 @@ curl -X POST http://localhost:3000/actions \
 
 ```
 client/            React 前端（src/App.tsx、api.ts，构建脚本 build.mjs）
+scripts/           自动取数脚本 canstar_fetch.py（一次拉取 Canstar 全部套餐并比对，生成录入文件；见 README「数据获取方式」）
 server/src/        Bun 服务端
   index.ts         HTTP 入口：静态文件 + POST /actions
   actions.ts       全部 action 的定义（zod 校验 + 处理逻辑）
