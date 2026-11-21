@@ -43,6 +43,42 @@ bun run start        # 默认 http://localhost:3000
 - **当前套餐**：默认是空的，需要你自己在页面上输入供应商、速度档位和每月月费，推荐和省钱计算才会出现；也可以随时清除。
 - **没有自动刷新**：原版在 Muse 托管环境里靠后台代理每天自动核价；独立运行版没有这个代理，也没有「立即刷新」按钮——按下面「手动核价流程」自行核对后录入，刷新页面即可看到更新后的数据（`markRefreshFailed` 用于记录一次失败的检查）。NBN 没有公开的价格数据接口，核对不到的套餐会保留原价和原核对日期，不会用猜测的数字填充。
 
+## 数据获取方式
+
+套餐价格的核对以 **Canstar 为主来源**，其他来源作交叉核对。2026-11-21 对照核对的结论：Canstar 去重后 8 档共 243 个套餐，比工具现有的 105 个更全，因此定为主来源（对照存档见原版工具的研究记录 `research_notes/nbn-canstar-comparison-20261121/canstar-reconciliation-20261121.md`）。
+
+### 来源清单
+
+1. **Canstar NBN 套餐页（主来源）**：<https://www.canstar.com.au/internet/nbn-plans/>
+2. **WhistleOut NBN 价目总表（交叉核对）**：<https://www.whistleout.com.au/Broadband/NBN-Plans-Price-Check-SLP>
+3. **Finder 最便宜 NBN 套餐表（交叉核对）**：<https://www.finder.com.au/broadband-plans/nbn/cheap-nbn-plans>；1000 档单独看 <https://www.finder.com.au/broadband-plans/nbn/nbn-1000-gigabit-internet>
+4. **各供应商官网 / CIS 文件（交叉核对，官网为准）**：页面底部「供应商目录」里有官网链接，每个套餐下方也标注了它的来源链接。
+5. **供应商名单**：以 nbnco 服务商目录为准（<https://www.nbnco.com.au/residential/service-providers>）。
+
+### Canstar 具体查法
+
+- 筛选条件：Internet Type = NBN；Internet Speed 按档位筛；Need A Modem? = Show All；**Online Partners 开关关掉（全量），改完务必刷新页面再读数**——只点开关不刷新，计数不变。
+- 总数：开关开着 440 条，关掉 458 条；“500M 及以上”开着 218、关掉 224。
+- 开着时各档条数：12+25 合计 70、50 是 58、100+250 合计 94、500 是 77、750 是 39、1000 是 61、2000 是 41。
+- 去重后数量（2026-11-21 核对）：25 档 33、50 档 33、100 档 51、250 档 6、500 档 48、750 档 24、1000 档 34、2000 档 14，共 243 个（另有 12M 档 5 个）。
+- 限制：页面一次最多显示 160 行；没有 12 与 25、100 与 250 的精确档位筛选——这两对按行里实际速度拆开再数；条数是列表变体数，不是去重后的套餐数；页面自述不是全市场比价。
+
+### 去重规则
+
+同一商家 + 同一套餐名 + 同一价格组合算一个；同一套餐的 BYO / 带 modem / 合约 / 捆绑变体只算一个。
+
+### 价格口径
+
+长期价 = 第一年 12 个月平均月费 =（优惠价 × 优惠月数 + 续费价 × 剩余月数）÷ 12；无优惠则为续费价。Canstar 的 “Equivalent monthly cost” 栏就是这个数，可以直接取用，但要按上面公式复算一遍。
+
+### 核对方法
+
+1. 先在 Canstar 主来源上按档位逐行核对，再用 WhistleOut、Finder 两张总表交叉核对。
+2. 官网价格和总表不一致时，以官网为准；签约前再以供应商的 CIS 文件为准。
+3. 每次核对记下核对日期（`checked_date`，格式 `YYYY-MM-DD`），录入时填这一天。
+4. 核不到的套餐不要录入，保留原价和原核对日期，不要猜数字填进去。
+5. 同一套餐在不同来源价格不一致时，先看是不是优惠版本的区别（例如 DODO 的 WhistleOut 专享价比 Canstar 标准价低约 $4，专享价是对的）；分不清的以官网为准，仍分不清的保留原价并在备注里写明。
+
 ## 手动核价流程
 
 独立运行版没有后台自动核价，价格不会自己更新。按下面流程手动核对并录入，价格、推荐和图表才会跟着更新。**建议每月核一次**；打算换套餐、看到促销新闻、或某个套餐的优惠快到期时，再加核一次。
@@ -53,14 +89,15 @@ bun run start        # 默认 http://localhost:3000
 
 ### 第 1 步：列出要核的套餐
 
-页面「套餐明细」里就是全部要核的套餐（105 个，分 25 / 50 / 100 / 250 / 500 / 750 / 1000 / 2000 八个档位）。不用一个一个打开网页：先在 WhistleOut 和 Finder 两张总表上批量核对，再去供应商官网逐个确认有变动的。
+页面「套餐明细」里就是全部要核的套餐（105 个，分 25 / 50 / 100 / 250 / 500 / 750 / 1000 / 2000 八个档位）。不用一个一个打开网页：先在 Canstar 主来源上按档位批量核对，再用 WhistleOut 和 Finder 两张总表交叉核对，最后去供应商官网逐个确认有变动的。
 
 ### 第 2 步：去这些地方查价
 
-1. **WhistleOut NBN 价目总表**：<https://www.whistleout.com.au/Broadband/NBN-Plans-Price-Check-SLP>——大多数套餐的优惠价和优惠后价格都能在这里一次看到。
-2. **Finder 最便宜 NBN 套餐表**：<https://www.finder.com.au/broadband-plans/nbn/cheap-nbn-plans>；1000 档单独看 <https://www.finder.com.au/broadband-plans/nbn/nbn-1000-gigabit-internet>。
-3. **各供应商官网**：页面底部「供应商目录」里有官网链接，每个套餐下方也标注了它的来源链接；官网价格和总表不一致时，以官网为准，签约前再以供应商的 CIS 文件为准。
-4. **供应商名单**：以 nbnco 服务商目录为准（<https://www.nbnco.com.au/residential/service-providers>）。如果目录里出现新的供应商、或某个供应商停售 NBN，先记下来：新增的套餐录入时会新增一行；停售的套餐本次不录，保留原价和原核对日期，不要删行。
+1. **Canstar NBN 套餐页（主来源）**：<https://www.canstar.com.au/internet/nbn-plans/>——按上面「数据获取方式」里的查法逐档核对（筛选条件、开关关掉后刷新、160 行上限、12/25 与 100/250 按行里实际速度拆开、去重规则）。
+2. **WhistleOut NBN 价目总表**：<https://www.whistleout.com.au/Broadband/NBN-Plans-Price-Check-SLP>——大多数套餐的优惠价和优惠后价格都能在这里一次看到。
+3. **Finder 最便宜 NBN 套餐表**：<https://www.finder.com.au/broadband-plans/nbn/cheap-nbn-plans>；1000 档单独看 <https://www.finder.com.au/broadband-plans/nbn/nbn-1000-gigabit-internet>。
+4. **各供应商官网**：页面底部「供应商目录」里有官网链接，每个套餐下方也标注了它的来源链接；官网价格和总表不一致时，以官网为准，签约前再以供应商的 CIS 文件为准。
+5. **供应商名单**：以 nbnco 服务商目录为准（<https://www.nbnco.com.au/residential/service-providers>）。如果目录里出现新的供应商、或某个供应商停售 NBN，先记下来：新增的套餐录入时会新增一行；停售的套餐本次不录，保留原价和原核对日期，不要删行。
 
 ### 第 3 步：每个套餐核对这些字段
 
