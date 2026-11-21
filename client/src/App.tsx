@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 CartesianGrid,
@@ -71,6 +71,44 @@ function avg12(p: {
   if (p.introPrice == null) return p.ongoingPrice;
   const m = Math.min(Math.max(p.introMonths ?? 0, 0), 12);
   return (p.introPrice * m + p.ongoingPrice * (12 - m)) / 12;
+}
+
+// 今天（悉尼日期），YYYY-MM-DD。
+function todaySydney(): string {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "Australia/Sydney",
+  });
+}
+
+// 优惠已过期：promoEnd 有值且早于今天。过期套餐不显示，数据保留在库里。
+export function isPromoExpired(
+  plan: { promoEnd: string | null },
+  today: string,
+): boolean {
+  return plan.promoEnd != null && plan.promoEnd < today;
+}
+
+// 同品牌同档位合并：一组 = 同一个品牌在同一档位的所有套餐，
+// 主行是该组 12 个月均价最低的那一个，其余按均价排在展开列表里。
+export type BrandGroup = { provider: string; main: Plan; rest: Plan[] };
+export function groupPlansByBrand(plans: Plan[]): BrandGroup[] {
+  const by = new Map<string, Plan[]>();
+  for (const p of plans) {
+    const key = p.provider.toLowerCase();
+    const g = by.get(key);
+    if (g) g.push(p);
+    else by.set(key, [p]);
+  }
+  const out: BrandGroup[] = [];
+  for (const ps of by.values()) {
+    const sorted = [...ps].sort(
+      (a, b) => avg12(a) - avg12(b) || a.ongoingPrice - b.ongoingPrice,
+    );
+    const main = sorted.shift();
+    if (!main) continue;
+    out.push({ provider: main.provider, main, rest: sorted });
+  }
+  return out;
 }
 
 function fmtTime(iso: string): string {
@@ -375,6 +413,43 @@ function PlanRow({ plan, rank }: { plan: Plan; rank: number }) {
   );
 }
 
+// 同品牌同档位的一组：只显示 12 个月均价最低的主行，其余套餐收在
+// 可展开的列表里（参考电费气费工具按供应商分组的做法）。
+function BrandGroupRow({
+  group,
+  bestAvg,
+}: {
+  group: BrandGroup;
+  bestAvg: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const { main, rest } = group;
+  return (
+    <>
+      <PlanRow plan={main} rank={avg12(main) === bestAvg ? 0 : -1} />
+      {rest.length > 0 && (
+        <li className="border-b border-[var(--border)] py-2 last:border-b-0">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="text-sm font-medium text-[var(--teal)] underline"
+          >
+            同品牌还有 {rest.length} 个套餐 {open ? "▴" : "▾"}
+          </button>
+          {open && (
+            <ul className="mt-1">
+              {rest.map((p) => (
+                <PlanRow key={p.id} plan={p} rank={-1} />
+              ))}
+            </ul>
+          )}
+        </li>
+      )}
+    </>
+  );
+}
+
 function CheapestTierRow({
   tier,
   plan,
@@ -459,13 +534,27 @@ export function App() {
 
   const data = state.data;
 
+  // 今天（悉尼日期）：优惠过期的套餐不显示（数据保留在库里），
+  // 每档最便宜、套餐列表和推荐都只按显示出来的行算。
+  const todayStr = useMemo(() => todaySydney(), []);
+  const displayPlans = useMemo(() => {
+    if (!data) return [] as Plan[];
+    return data.plans.filter((p) => !isPromoExpired(p, todayStr));
+  }, [data, todayStr]);
+
+  // 列表排序价：跟原来一致，intro 档按优惠价排，其余按 12 个月平均排。
+  const sortPrice = useCallback(
+    (p: Plan) =>
+      sortBy === "intro" ? (p.introPrice ?? p.ongoingPrice) : avg12(p),
+    [sortBy],
+  );
+
   // 每档长期价最低：长期价 = 12 个月平均月费（见 avg12），同价时
   // 优惠结束后的月费更低的排前面。
   const cheapestByTier = useMemo(() => {
-    if (!data) return [] as { tier: string; plan: Plan }[];
     const out: { tier: string; plan: Plan }[] = [];
     for (const tier of TIERS) {
-      const inTier = data.plans.filter((p) => p.tier === tier);
+      const inTier = displayPlans.filter((p) => p.tier === tier);
       if (inTier.length === 0) continue;
       const best = [...inTier].sort(
         (a, b) => avg12(a) - avg12(b) || a.ongoingPrice - b.ongoingPrice,
@@ -473,20 +562,17 @@ export function App() {
       if (best) out.push({ tier, plan: best });
     }
     return out;
-  }, [data]);
+  }, [displayPlans]);
 
   const visiblePlans = useMemo(() => {
-    if (!data) return [];
-    const list = data.plans.filter(
+    const list = displayPlans.filter(
       (p) => tierFilter === "all" || p.tier === tierFilter,
     );
-    const price = (p: Plan) =>
-      sortBy === "intro" ? (p.introPrice ?? p.ongoingPrice) : avg12(p);
     return [...list].sort((a, b) => {
       if (a.tier !== b.tier) return Number(a.tier) - Number(b.tier);
-      return price(a) - price(b);
+      return sortPrice(a) - sortPrice(b);
     });
-  }, [data, tierFilter, sortBy]);
+  }, [displayPlans, tierFilter, sortPrice]);
 
   const chartData = useMemo(() => {
     if (!data) return [];
@@ -587,7 +673,7 @@ export function App() {
     const byValue = (a: Plan, b: Plan) =>
       avg12(a) - avg12(b) || Number(b.tier) - Number(a.tier);
     const best =
-      [...data.plans]
+      [...displayPlans]
         .filter(
           (p) =>
             Number(p.tier) >= Number(cp.tier) &&
@@ -597,7 +683,7 @@ export function App() {
         .sort(byValue)[0] ?? null;
     const futureBest =
       !best && own && own.ongoingPrice > basis + 0.001
-        ? ([...data.plans]
+        ? ([...displayPlans]
             .filter(
               (p) =>
                 Number(p.tier) >= Number(cp.tier) &&
@@ -616,7 +702,7 @@ export function App() {
       futureSaving:
         futureBest && own ? own.ongoingPrice - avg12(futureBest) : 0,
     };
-  }, [data]);
+  }, [data, displayPlans]);
 
   return (
     <div className="min-h-screen bg-[var(--bg)] font-sans">
@@ -1076,6 +1162,10 @@ export function App() {
               ).map((tier) => {
                 const inTier = visiblePlans.filter((p) => p.tier === tier);
                 if (inTier.length === 0) return null;
+                // 同品牌同档位合并：每组只显示 12 个月均价最低的主行，
+                // 其余套餐收在组内的展开列表里；组按主行的排序价排。
+                const groups = groupPlansByBrand(inTier);
+                groups.sort((a, b) => sortPrice(a.main) - sortPrice(b.main));
                 const bestAvg = Math.min(...inTier.map((p) => avg12(p)));
                 return (
                   <div key={tier} className="mt-4">
@@ -1083,11 +1173,11 @@ export function App() {
                       {tier} Mbps
                     </h3>
                     <ul className="mt-1 border border-[var(--border)] bg-[var(--surface)] px-3" style={{ borderRadius: "var(--radius)" }}>
-                      {inTier.map((p) => (
-                        <PlanRow
-                          key={p.id}
-                          plan={p}
-                          rank={avg12(p) === bestAvg ? 0 : -1}
+                      {groups.map((g) => (
+                        <BrandGroupRow
+                          key={g.provider}
+                          group={g}
+                          bestAvg={bestAvg}
                         />
                       ))}
                     </ul>

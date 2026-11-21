@@ -666,6 +666,11 @@ export const Actions = {
                 .trim()
                 .max(400, "note 最多 400 个字符")
                 .optional(),
+              promo_end: z
+                .string({ error: "promo_end 必须是字符串" })
+                .trim()
+                .max(10, "promo_end 最多 10 个字符")
+                .optional(),
             }),
           )
           .min(1, "plans 至少要包含 1 个套餐")
@@ -704,6 +709,17 @@ export const Actions = {
               code: "custom",
               path: ["plans", i, "intro_price"],
               message: `第 ${row} 行 intro_price：优惠月数大于 0 时必须填写优惠价`,
+            });
+          }
+          if (
+            typeof p.promo_end === "string" &&
+            p.promo_end !== "" &&
+            !isRealDate(p.promo_end)
+          ) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["plans", i, "promo_end"],
+              message: `第 ${row} 行 promo_end：不是合法日期（例如 2026-02-30 不存在）`,
             });
           }
         });
@@ -770,6 +786,12 @@ export const Actions = {
               tes: newTes,
               checkedDate: args.checked_date,
               note: p.note ?? match.note,
+              // promo_end 没提供时保留原来的截止日期；只在提供了
+              // 合法日期时才更新（不参与“价格有没有变”的比较）。
+              promoEnd:
+                p.promo_end && p.promo_end.length > 0
+                  ? p.promo_end
+                  : match.promoEnd,
               source: "刷新复核（WhistleOut / Finder / 供应商官网）",
               lastRefreshStatus: changed ? "updated" : "unchanged",
               lastRefreshAt: nowIso,
@@ -807,6 +829,8 @@ export const Actions = {
               source: "刷新复核（WhistleOut / Finder / 供应商官网）",
               checkedDate: args.checked_date,
               note: p.note ?? null,
+              promoEnd:
+                p.promo_end && p.promo_end.length > 0 ? p.promo_end : null,
               lastRefreshStatus: "updated",
               lastRefreshAt: nowIso,
             })
