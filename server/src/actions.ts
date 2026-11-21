@@ -349,7 +349,7 @@ export const Actions = {
 
   seedPlans: defineAction({
     description:
-      "Seeds any missing monitored NBN plans, price-history points, and nbnco provider directory rows from the 2026-11-21 snapshot of the hosted tool's current data, and removes duplicate plan rows (same brand, tier and identical prices under slightly different names, left behind by earlier refreshes). Idempotent: existing rows are never overwritten, so refreshed prices and user edits survive. The user's own current plan is not seeded — it starts empty and is entered on the page.",
+      "Seeds any missing monitored NBN plans, price-history points, and nbnco provider directory rows from the 2026-11-21 snapshot of the hosted tool's current data plus the 145 plans added from the 2026-11-21 Canstar comparison (https://www.canstar.com.au/internet/nbn-plans/), and removes duplicate plan rows (same brand, tier and identical prices under slightly different names, left behind by earlier refreshes). Idempotent: existing rows are never overwritten, so refreshed prices and user edits survive. The user's own current plan is not seeded — it starts empty and is entered on the page.",
     request: z.object({}),
     response: z.object({ seeded: z.boolean(), planCount: z.number() }),
     async handler(ctx) {
@@ -385,6 +385,7 @@ export const Actions = {
               introMonths: p.introMonths ?? null,
               ongoingPrice: p.ongoingPrice,
               tes: p.tes ?? null,
+              dataAllowance: p.dataAllowance ?? "无限流量",
               contract: p.contract ?? null,
               category: p.category,
               source: p.source,
