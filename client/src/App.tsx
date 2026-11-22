@@ -593,8 +593,10 @@ function CheapestTierRow({
           <UpdateBadge status={plan.lastRefreshStatus} />
         </div>
         <div className="price text-left text-[var(--text)] sm:shrink-0 sm:text-right">
-          <span className="text-lg font-semibold">{money(avgByBasis(plan, basis))}</span>
-          <span className="text-sm text-[var(--dim)]">/月 · {basis === "avg24" ? "24 个月平均" : "12 个月平均"}</span>
+          {/* 均价只显示当前比较基准的那一个，并用青色高亮：选 24 个月
+              均价后，这里显示的 24 个月平均就是这一行最显眼的数字。 */}
+          <span className="text-lg font-semibold text-[var(--teal)]">{money(avgByBasis(plan, basis))}</span>
+          <span className="text-sm text-[var(--teal)]">/月 · {basis === "avg24" ? "24 个月平均" : "12 个月平均"}</span>
           <div className="flex flex-wrap items-center text-sm font-normal text-[var(--dim)] sm:justify-end">
             <span>
               {plan.introPrice != null ? (
