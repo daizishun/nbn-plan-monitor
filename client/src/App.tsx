@@ -61,8 +61,10 @@ function money(v: number): string {
 }
 
 // 比较基准：页面上所有「长期价」排名（每档最便宜标记、各档排序、
-// 顶部推荐）按哪个平均算。默认 12 个月均价；切到 24 个月均价后
-// 立即生效。每个套餐行上两个平均都显示，不受切换影响。
+// 顶部推荐）和每个套餐行上显示的均价，都按哪个平均算。默认
+// 12 个月均价；切到 24 个月均价后立即生效，套餐行只显示
+// 24 个月平均和两年总费用；两个窗口的完整算式都在展开的
+// 「计算过程」里。
 export type CompareBasis = "avg12" | "avg24";
 
 // 长期价按 12 个月平均算：第一年总费用 ÷ 12。优惠价占头 n 个月就按
@@ -478,21 +480,6 @@ function PlanRow({
                 前 {plan.introMonths ?? "—"} 个月 · 之后{" "}
                 {money(plan.ongoingPrice)}/月
               </p>
-              <p className="price flex flex-wrap items-center text-sm font-medium text-[var(--teal)] sm:justify-end">
-                <span>
-                  12 个月平均 {money(avg12(plan))}/月 · 第一年共{" "}
-                  {money(firstYearTotal(plan))}
-                </span>
-                <CalcToggle
-                  open={calcOpen}
-                  onToggle={() => setCalcOpen((v) => !v)}
-                  planName={`${plan.provider} ${plan.planName}`}
-                />
-              </p>
-              <p className="price text-sm text-[var(--dim)] sm:text-right">
-                24 个月平均 {money(avg24(plan))}/月 · 两年共{" "}
-                {money(total24(plan))}
-              </p>
             </>
           ) : (
             <>
@@ -501,23 +488,31 @@ function PlanRow({
                 <span className="text-sm font-normal text-[var(--dim)]">/月</span>
               </p>
               <p className="text-sm text-[var(--teal)]">固定价，无优惠期</p>
-              <p className="price flex flex-wrap items-center text-sm font-medium text-[var(--teal)] sm:justify-end">
-                <span>
-                  12 个月平均 {money(avg12(plan))}/月 · 第一年共{" "}
-                  {money(firstYearTotal(plan))}
-                </span>
-                <CalcToggle
-                  open={calcOpen}
-                  onToggle={() => setCalcOpen((v) => !v)}
-                  planName={`${plan.provider} ${plan.planName}`}
-                />
-              </p>
-              <p className="price text-sm text-[var(--dim)] sm:text-right">
-                24 个月平均 {money(avg24(plan))}/月 · 两年共{" "}
-                {money(total24(plan))}
-              </p>
             </>
           )}
+          {/* 均价只显示当前比较基准的那一个：切到 24 个月均价后，
+              这里就只显示 24 个月平均和两年总费用，不再并列 12 个月
+              平均；两个窗口的完整算式都在展开的「计算过程」里。 */}
+          <p className="price flex flex-wrap items-center text-sm font-medium text-[var(--teal)] sm:justify-end">
+            <span>
+              {basis === "avg24" ? (
+                <>
+                  24 个月平均 {money(avg24(plan))}/月 · 两年共{" "}
+                  {money(total24(plan))}
+                </>
+              ) : (
+                <>
+                  12 个月平均 {money(avg12(plan))}/月 · 第一年共{" "}
+                  {money(firstYearTotal(plan))}
+                </>
+              )}
+            </span>
+            <CalcToggle
+              open={calcOpen}
+              onToggle={() => setCalcOpen((v) => !v)}
+              planName={`${plan.provider} ${plan.planName}`}
+            />
+          </p>
         </div>
       </div>
       {calcOpen && <CalcPanel plan={plan} />}
