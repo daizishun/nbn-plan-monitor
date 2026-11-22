@@ -62,8 +62,8 @@ function money(v: number): string {
 
 // 比较基准：页面上所有「长期价」排名（每档最便宜标记、各档排序、
 // 顶部推荐）和每个套餐行上显示的均价，都按哪个平均算。默认
-// 12 个月均价；切到 24 个月均价后立即生效，套餐行只显示
-// 24 个月平均和两年总费用；两个窗口的完整算式都在展开的
+// 24 个月均价；切到 12 个月均价后立即生效，套餐行只显示
+// 12 个月平均和第一年总费用；两个窗口的完整算式都在展开的
 // 「计算过程」里。
 export type CompareBasis = "avg12" | "avg24";
 
@@ -665,9 +665,9 @@ function BasisToggle({
 export function App() {
   const queryClient = useQueryClient();
   const [tierFilter, setTierFilter] = useState<string>("all");
-  // 比较基准：默认 12 个月均价；切到 24 个月均价后，每档最便宜
-  // 标记、各档排序和顶部推荐都按 24 个月均价算，立即生效。
-  const [compareBasis, setCompareBasis] = useState<CompareBasis>("avg12");
+  // 比较基准：默认 24 个月均价；切到 12 个月均价后，每档最便宜
+  // 标记、各档排序和顶部推荐都按 12 个月均价算，立即生效。
+  const [compareBasis, setCompareBasis] = useState<CompareBasis>("avg24");
   const [recCalcOpen, setRecCalcOpen] = useState(false);
   const seedTried = useRef(false);
 
