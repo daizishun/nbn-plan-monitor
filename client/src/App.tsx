@@ -665,7 +665,6 @@ function BasisToggle({
 export function App() {
   const queryClient = useQueryClient();
   const [tierFilter, setTierFilter] = useState<string>("all");
-  const [sortBy, setSortBy] = useState<"ongoing" | "intro">("ongoing");
   // 比较基准：默认 12 个月均价；切到 24 个月均价后，每档最便宜
   // 标记、各档排序和顶部推荐都按 24 个月均价算，立即生效。
   const [compareBasis, setCompareBasis] = useState<CompareBasis>("avg12");
@@ -728,12 +727,9 @@ export function App() {
   const basisLabel = compareBasis === "avg24" ? "24 个月" : "12 个月";
   const basisYearsLabel = compareBasis === "avg24" ? "两年" : "第一年";
 
-  // 列表排序价：intro 档按优惠价排，其余按当前比较基准的平均排。
-  const sortPrice = useCallback(
-    (p: Plan) =>
-      sortBy === "intro" ? (p.introPrice ?? p.ongoingPrice) : avgBasis(p),
-    [sortBy, avgBasis],
-  );
+  // 列表排序价：始终按当前比较基准的平均排——排序条件就是比较基准，
+  // 不再另设「按均价 / 按优惠价」按钮。
+  const sortPrice = useCallback((p: Plan) => avgBasis(p), [avgBasis]);
 
   // 每档长期价最低：长期价 = 当前比较基准的平均月费（见 avg12 /
   // avg24），同价时优惠结束后的月费更低的排前面。
@@ -1297,6 +1293,12 @@ export function App() {
             <section className="mt-8">
               <h2 className="text-lg font-bold text-[var(--text)]">套餐明细</h2>
               <div className="mt-2 flex flex-wrap items-center gap-2">
+                <BasisToggle basis={compareBasis} onChange={setCompareBasis} label="比较基准" />
+                <span className="text-sm text-[var(--dim)]">
+                  和上面「每档长期价最低」是同一个切换，两边同步；明细里每档的「平均最低」标记和档内排序按所选均价算。
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   aria-label="显示全部档位"
@@ -1320,29 +1322,6 @@ export function App() {
                     {t}M
                   </button>
                 ))}
-                <span className="mx-1 hidden h-5 w-px bg-[var(--border)] sm:inline-block" />
-                <button
-                  type="button"
-                  aria-label={`按${basisLabel}平均价排序`}
-                  aria-pressed={sortBy === "ongoing"}
-                  onClick={() => setSortBy("ongoing")}
-                  className={`px-3 py-1.5 text-sm font-medium ${sortBy === "ongoing" ? "bg-[var(--accent)] text-[var(--accent-ink)]" : "bg-[var(--surface-alt)] text-[var(--text)]"}`}
-                  style={{ borderRadius: "var(--radius)" }}
-                >
-                  按 {basisLabel}均价
-                </button>
-                <button
-                  type="button"
-                  aria-label="按优惠价排序"
-                  aria-pressed={sortBy === "intro"}
-                  onClick={() => setSortBy("intro")}
-                  className={`px-3 py-1.5 text-sm font-medium ${sortBy === "intro" ? "bg-[var(--accent)] text-[var(--accent-ink)]" : "bg-[var(--surface-alt)] text-[var(--text)]"}`}
-                  style={{ borderRadius: "var(--radius)" }}
-                >
-                  按优惠价
-                </button>
-                <span className="mx-1 hidden h-5 w-px bg-[var(--border)] sm:inline-block" />
-                <BasisToggle basis={compareBasis} onChange={setCompareBasis} label="比较基准" />
               </div>
               {tierFilter === "100" && (
                 <p className="mt-2 text-sm text-[var(--dim)]">
