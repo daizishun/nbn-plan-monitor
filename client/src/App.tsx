@@ -1230,13 +1230,13 @@ export function App() {
                         className="mt-1 w-full border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[var(--text)]"
                       />
                     </label>
-                    <label className="block">
+                    <label className="block w-32">
                       <span className="text-sm text-[var(--dim)]">速度档位</span>
                       <select
                         aria-label="当前套餐速度档位"
                         value={cpTier}
                         onChange={(e) => setCpTier(e.target.value)}
-                        className="mt-1 border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[var(--text)]"
+                        className="mt-1 w-full border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[var(--text)]"
                       >
                         {TIERS.map((t) => (
                           <option key={t} value={t}>
