@@ -470,40 +470,23 @@ function PlanRow({
           </p>
         </div>
         <div className="shrink-0 text-left sm:text-right">
-          {plan.introPrice != null ? (
-            <>
-              <p className="price text-lg font-semibold text-[var(--text)]">
-                {money(plan.introPrice)}
-                <span className="text-sm font-normal text-[var(--dim)]">/月</span>
-              </p>
-              <p className="price text-sm text-[var(--dim)]">
-                前 {plan.introMonths ?? "—"} 个月 · 之后{" "}
-                {money(plan.ongoingPrice)}/月
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="price text-lg font-semibold text-[var(--text)]">
-                {money(plan.ongoingPrice)}
-                <span className="text-sm font-normal text-[var(--dim)]">/月</span>
-              </p>
-              <p className="text-sm text-[var(--teal)]">固定价，无优惠期</p>
-            </>
-          )}
-          {/* 均价只显示当前比较基准的那一个：切到 24 个月均价后，
-              这里就只显示 24 个月平均和两年总费用，不再并列 12 个月
-              平均；两个窗口的完整算式都在展开的「计算过程」里。 */}
-          <p className="price flex flex-wrap items-center text-sm font-medium text-[var(--teal)] sm:justify-end">
+          {/* 均价就是这一行最显眼的数字：大号青色加粗，和上面「每档长期价最低」表里一样。
+              优惠价/固定价只在下面小字里写明细，不再单独占一个大号黑字。 */}
+          <p className="price">
+            <span className="text-lg font-semibold text-[var(--teal)]">{money(avgByBasis(plan, basis))}</span>
+            <span className="text-sm text-[var(--teal)]">/月 · {basis === "avg24" ? "24 个月平均" : "12 个月平均"}</span>
+          </p>
+          <div className="flex flex-wrap items-center text-sm font-normal text-[var(--dim)] sm:justify-end">
             <span>
-              {basis === "avg24" ? (
+              {plan.introPrice != null ? (
                 <>
-                  24 个月平均 {money(avg24(plan))}/月 · 两年共{" "}
-                  {money(total24(plan))}
+                  优惠 {money(plan.introPrice)}×{plan.introMonths ?? "—"} 个月 · 之后 {money(plan.ongoingPrice)} ·{" "}
+                  {basis === "avg24" ? <>两年共 {money(total24(plan))}</> : <>第一年共 {money(firstYearTotal(plan))}</>}
                 </>
               ) : (
                 <>
-                  12 个月平均 {money(avg12(plan))}/月 · 第一年共{" "}
-                  {money(firstYearTotal(plan))}
+                  固定价，无优惠期 ·{" "}
+                  {basis === "avg24" ? <>两年共 {money(total24(plan))}</> : <>第一年共 {money(firstYearTotal(plan))}</>}
                 </>
               )}
             </span>
@@ -512,7 +495,7 @@ function PlanRow({
               onToggle={() => setCalcOpen((v) => !v)}
               planName={`${plan.provider} ${plan.planName}`}
             />
-          </p>
+          </div>
         </div>
       </div>
       {calcOpen && <CalcPanel plan={plan} />}
