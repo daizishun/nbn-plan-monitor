@@ -878,7 +878,7 @@ export function App() {
   return (
     <div className="min-h-screen bg-[var(--bg)] font-sans">
       <SafeAreaTopScrim backgroundColor="var(--bg)" />
-      <main className="mx-auto max-w-3xl px-4 pb-10">
+      <main className="mx-auto max-w-6xl px-4 pb-10">
         {/* Address strip */}
         <section className="pt-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
