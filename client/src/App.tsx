@@ -650,9 +650,9 @@ function BasisToggle({
 export function App() {
   const queryClient = useQueryClient();
   const [tierFilter, setTierFilter] = useState<string>("all");
-  // 比较基准：默认 24 个月均价；切到 12 个月均价后，每档最便宜
-  // 标记、各档排序和顶部推荐都按 12 个月均价算，立即生效。
-  const [compareBasis, setCompareBasis] = useState<CompareBasis>("avg24");
+  // 比较基准：默认 12 个月均价；切到 24 个月均价后，每档最便宜
+  // 标记、各档排序和顶部推荐都按 24 个月均价算，立即生效。
+  const [compareBasis, setCompareBasis] = useState<CompareBasis>("avg12");
   const [recCalcOpen, setRecCalcOpen] = useState(false);
   const seedTried = useRef(false);
 
@@ -1218,8 +1218,8 @@ export function App() {
                     saveCp.mutate();
                   }}
                 >
-                  <div className="flex flex-wrap gap-3">
-                    <label className="block min-w-36 flex-1">
+                  <div className="flex flex-wrap items-end gap-3">
+                    <label className="block min-w-36 max-w-sm flex-1">
                       <span className="text-sm text-[var(--dim)]">供应商</span>
                       <input
                         {...FIELDS.saveCurrentPlan.provider}
@@ -1257,19 +1257,19 @@ export function App() {
                         className="mt-1 w-full border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[var(--text)]"
                       />
                     </label>
+                    <button
+                      type="submit"
+                      aria-label="保存我现在的套餐"
+                      disabled={saveCp.isPending}
+                      className="bg-[var(--teal)] px-4 py-2 font-semibold text-white disabled:opacity-50"
+                      style={{ borderRadius: "var(--radius)" }}
+                    >
+                      {saveCp.isPending ? "保存中…" : "保存并比较"}
+                    </button>
                   </div>
                   {cpError && (
                     <p className="mt-2 text-sm text-[var(--warn)]">{cpError}</p>
                   )}
-                  <button
-                    type="submit"
-                    aria-label="保存我现在的套餐"
-                    disabled={saveCp.isPending}
-                    className="mt-3 bg-[var(--teal)] px-4 py-2 font-semibold text-white disabled:opacity-50"
-                    style={{ borderRadius: "var(--radius)" }}
-                  >
-                    {saveCp.isPending ? "保存中…" : "保存并比较"}
-                  </button>
                 </form>
               )}
             </section>
