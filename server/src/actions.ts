@@ -410,6 +410,22 @@ export const Actions = {
       // ↑ flags are stale: rows whose price did not change in this sync go
       // back to "unchanged". Rows whose price did change are stamped
       // "updated" by the update below, which runs after this reset.
+      // Rows the seed itself marks "updated" (price changed or added in
+      // this seed version): stamp them green even when their stored values
+      // already match the seed — a database created fresh from this seed
+      // has no "before" price to compare against, so the price-change
+      // comparison below would never flag them and every icon would stay
+      // grey. This list is what makes the icons meaningful on a fresh
+      // install.
+      const seedMarkedUpdated: { seed: SeedPlan; row: PlanRow }[] = [];
+      for (const p of SEED_PLANS) {
+        if (p.lastRefreshStatus !== "updated") continue;
+        const row = byKey.get(key(p.provider, p.planName, p.tier));
+        if (!row) continue;
+        if (row.lastRefreshStatus !== "updated") {
+          seedMarkedUpdated.push({ seed: p, row });
+        }
+      }
       const seedKeys = new Set(
         SEED_PLANS.map((p) => key(p.provider, p.planName, p.tier)),
       );
@@ -421,6 +437,7 @@ export const Actions = {
         missingProviders.length > 0 ||
         updatedPlans.length > 0 ||
         updatedProviders.length > 0 ||
+        seedMarkedUpdated.length > 0 ||
         newSeedVersion
       ) {
         const statements: BatchItem<"sqlite">[] = [];
@@ -444,7 +461,7 @@ export const Actions = {
               checkedDate: p.checkedDate ?? CHECKED,
               promoEnd: p.promoEnd ?? null,
               note: p.note ?? null,
-              lastRefreshStatus: "unchanged" as const,
+              lastRefreshStatus: p.lastRefreshStatus ?? "unchanged",
             }),
           );
         }
@@ -467,6 +484,16 @@ export const Actions = {
             );
           }
         }
+        // Seed-marked rows go green after the reset above (which runs
+        // first in this batch), so they survive a fresh install.
+        for (const { row } of seedMarkedUpdated) {
+          statements.push(
+            db
+              .update(schema.plans)
+              .set({ lastRefreshStatus: "updated", lastRefreshAt: nowIso })
+              .where(eq(schema.plans.id, row.id)),
+          );
+        }
         for (const { seed: p, row, priceChanged } of updatedPlans) {
           const sv = seedValues(p);
           statements.push(
@@ -474,7 +501,8 @@ export const Actions = {
               .update(schema.plans)
               .set({
                 ...sv,
-                lastRefreshStatus: priceChanged ? "updated" : "unchanged",
+                lastRefreshStatus:
+                  p.lastRefreshStatus ?? (priceChanged ? "updated" : "unchanged"),
                 lastRefreshAt: nowIso,
               })
               .where(eq(schema.plans.id, row.id)),
